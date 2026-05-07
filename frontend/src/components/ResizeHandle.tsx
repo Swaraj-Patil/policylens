@@ -3,26 +3,29 @@ import { useCallback, type PointerEvent } from 'react'
 /**
  * A thin draggable handle for resizing a side panel.
  *
- * - Hit area is 4px wide, positioned slightly outside the panel edge so it
+ * - Hit area is 8px wide, positioned slightly outside the panel edge so it
  *   overlaps the panel's existing border. Visually invisible at rest;
  *   accent-tinted on hover/drag so the affordance is discoverable but never
  *   imposes itself on the chrome.
- * - Uses pointer events (not mouse events) so it works for trackpad, mouse,
- *   pen, and touch uniformly, with pointer capture so the drag survives
- *   moving outside the handle.
+ * - Pointer events (not mouse events) so it works for trackpad, mouse, pen,
+ *   and touch uniformly. setPointerCapture means the drag survives moving
+ *   outside the handle.
  * - Emits raw `dx` deltas to the caller; sign interpretation lives where the
  *   width is owned (the sidebar adds dx, the inspector subtracts).
+ * - Double-click → onReset() so the caller can snap back to a default width.
  */
 export function ResizeHandle({
   edge,
   onDelta,
   onDragStart,
   onDragEnd,
+  onReset,
 }: {
   edge: 'left' | 'right'
   onDelta: (dx: number) => void
   onDragStart?: () => void
   onDragEnd?: () => void
+  onReset?: () => void
 }) {
   const handlePointerDown = useCallback(
     (e: PointerEvent<HTMLDivElement>) => {
@@ -45,7 +48,7 @@ export function ResizeHandle({
         try {
           target.releasePointerCapture(e.pointerId)
         } catch {
-          // pointer may already be released — non-fatal
+          // already released — non-fatal
         }
         onDragEnd?.()
       }
@@ -59,13 +62,25 @@ export function ResizeHandle({
   return (
     <div
       onPointerDown={handlePointerDown}
+      onDoubleClick={onReset}
       role="separator"
       aria-orientation="vertical"
+      title={onReset ? 'Drag to resize · double-click to reset' : 'Drag to resize'}
+      // The wrapper is the 8px hit area (subtle generous click target).
+      // The inner span is the 1px visible line that lights up on hover/drag.
       className={
-        'absolute top-0 z-10 h-full w-1 cursor-ew-resize ' +
-        'bg-transparent hover:bg-accent/30 active:bg-accent/50 transition-colors ' +
-        (edge === 'right' ? '-right-0.5' : '-left-0.5')
+        'group absolute top-0 z-10 h-full w-2 cursor-ew-resize ' +
+        (edge === 'right' ? '-right-1' : '-left-1')
       }
-    />
+    >
+      <span
+        className={
+          'absolute top-0 bottom-0 w-px ' +
+          'bg-transparent group-hover:bg-accent/40 group-active:bg-accent/60 ' +
+          'transition-colors duration-150 ' +
+          (edge === 'right' ? 'right-1' : 'left-1')
+        }
+      />
+    </div>
   )
 }

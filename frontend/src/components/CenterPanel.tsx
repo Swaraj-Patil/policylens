@@ -1,28 +1,50 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { motion } from 'framer-motion'
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { useApp } from '../state'
-import type { QueryResponse } from '../types'
+import type { AnswerBlock, QueryResponse } from '../types'
 import { matchKeyOf, parseAnswerBlocks, tokenizeAnswer } from '../citations'
-import type { AnswerBlock } from '../types'
 import { CitationChip } from './CitationChip'
 
 const EXAMPLE_QUERIES = [
-  'What is academic freedom?',
-  'How do faculty promotions work?',
-  'What is the grade appeal process?',
+  'What are the rules for outside consulting?',
+  'How are faculty senate elections conducted?',
+  'What protections exist for academic freedom?',
+  'What is the grievance procedure for tenure disputes?',
+] as const
+
+const STATUS_PHASES = [
+  'Searching governance documents…',
+  'Analyzing relevant passages…',
+  'Synthesizing grounded answer…',
 ] as const
 
 const EASE_OUT_QUART: [number, number, number, number] = [0.16, 1, 0.3, 1]
+
+// Char-per-second target for the answer stream-in. ~25 chars/frame at 60fps.
+const STREAM_CHARS_PER_SECOND = 1500
 
 export function CenterPanel() {
   const { currentQuery, runQuery } = useApp()
   const [value, setValue] = useState('')
   const showIdle = currentQuery === null
 
-  function submitQuery(query: string) {
-    setValue(query)
-    runQuery(query)
-  }
+  const submitQuery = useCallback(
+    (q: string) => {
+      setValue(q)
+      runQuery(q)
+    },
+    [runQuery],
+  )
 
   return (
     <div
@@ -34,11 +56,9 @@ export function CenterPanel() {
       <div className="w-full max-w-[680px] mx-auto">
         {showIdle && <IdleHero />}
 
-        <SearchBar
-          value={value}
-          onChange={setValue}
-          onSubmit={(q) => submitQuery(q)}
-        />
+        <SearchBar value={value} onChange={setValue} onSubmit={submitQuery} />
+
+        <StatusLine />
 
         {showIdle && <ExampleChips onSelect={submitQuery} />}
         {!showIdle && <ResultArea />}
@@ -66,7 +86,7 @@ function IdleHero() {
 }
 
 // ---------------------------------------------------------------------------
-// Search bar
+// Search bar (with keyboard-first workflow)
 // ---------------------------------------------------------------------------
 
 function SearchBar({
@@ -78,56 +98,120 @@ function SearchBar({
   onChange: (v: string) => void
   onSubmit: (q: string) => void
 }) {
-  const { loading, currentQuery, resetSession } = useApp()
+  const { loading, currentQuery, history, institution } = useApp()
   const inputRef = useRef<HTMLInputElement>(null)
   const [focused, setFocused] = useState(false)
 
-  // Auto-focus the search input on first mount so the user can start typing
-  // immediately. StrictMode runs effects twice in dev; focus() is idempotent.
+  // Only the current institution's history is navigable from the input —
+  // matches what's shown in the sidebar so Up/Down maps to "what I see".
+  const scopedHistory = useMemo(
+    () => history.filter((e) => e.institution === institution),
+    [history, institution],
+  )
+
+  // History navigation state. -1 means "user's current input", 0..N indexes
+  // into scopedHistory. savedValue holds whatever the user had typed so we
+  // can restore it when they navigate back past index 0.
+  const [historyIndex, setHistoryIndex] = useState(-1)
+  const savedValueRef = useRef('')
+
+  // Auto-focus input on first mount.
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
 
-  // Sync local input value with currentQuery so external triggers — clicking a
-  // history item or chip — populate the input automatically. Skipping when
-  // currentQuery is null leaves the user's typed text alone in idle state.
+  // Sync local input with currentQuery on external triggers (history click,
+  // chip click). Skip when typing locally — onChange handles that path.
   useEffect(() => {
     if (currentQuery !== null && currentQuery !== value) {
       onChange(currentQuery)
     }
   }, [currentQuery, value, onChange])
 
-  // Global keyboard shortcuts:
-  //   "/"   focus the input (ignored while typing in another field)
-  //   Esc   clear the input + return to idle (ignored while a request is in flight)
+  // Reset history-nav state whenever the result changes — a new submission
+  // ends the navigation session.
+  useEffect(() => {
+    setHistoryIndex(-1)
+    savedValueRef.current = ''
+  }, [currentQuery])
+
+  // Global shortcuts:
+  //   "/"               focus input (skipped while another input is focused)
+  //   Cmd/Ctrl + K      focus input from anywhere
   useEffect(() => {
     function handler(e: KeyboardEvent) {
+      const isMod = e.metaKey || e.ctrlKey
+
+      if (isMod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        inputRef.current?.focus()
+        inputRef.current?.select()
+        return
+      }
       if (e.key === '/') {
         const tag = (document.activeElement?.tagName || '').toLowerCase()
         if (tag === 'input' || tag === 'textarea') return
         e.preventDefault()
         inputRef.current?.focus()
-        return
-      }
-      if (e.key === 'Escape') {
-        if (loading) return
-        if (value === '' && currentQuery === null) return
-        e.preventDefault()
-        onChange('')
-        resetSession()
-        // Move focus back to the input so the user can immediately type again.
-        inputRef.current?.focus()
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [loading, value, currentQuery, onChange, resetSession])
+  }, [])
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
     const q = value.trim()
     if (!q || loading) return
+    setHistoryIndex(-1)
+    savedValueRef.current = ''
     onSubmit(q)
+  }
+
+  // Input-local keyboard handling. Esc + arrows are scoped to the input so
+  // they don't fight with the rest of the page.
+  function handleInputKeyDown(e: ReactKeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Escape') {
+      // Two-step Esc: first press clears any text; second press blurs.
+      if (loading) return
+      if (value !== '') {
+        e.preventDefault()
+        onChange('')
+        setHistoryIndex(-1)
+        savedValueRef.current = ''
+        return
+      }
+      e.preventDefault()
+      inputRef.current?.blur()
+      return
+    }
+
+    if (e.key === 'ArrowUp') {
+      if (loading || scopedHistory.length === 0) return
+      const next = historyIndex + 1
+      if (next >= scopedHistory.length) return // already at oldest
+      e.preventDefault()
+      if (historyIndex === -1) savedValueRef.current = value
+      setHistoryIndex(next)
+      onChange(scopedHistory[next].query)
+      return
+    }
+
+    if (e.key === 'ArrowDown') {
+      if (loading) return
+      if (historyIndex === -1) return // nothing to walk back to
+      e.preventDefault()
+      const next = historyIndex - 1
+      setHistoryIndex(next)
+      onChange(next === -1 ? savedValueRef.current : scopedHistory[next].query)
+      return
+    }
+  }
+
+  // User-initiated typing resets history-nav so subsequent Up starts fresh.
+  function handleInputChange(e: ChangeEvent<HTMLInputElement>) {
+    if (historyIndex !== -1) setHistoryIndex(-1)
+    onChange(e.target.value)
   }
 
   return (
@@ -149,7 +233,8 @@ function SearchBar({
         ref={inputRef}
         type="text"
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={handleInputChange}
+        onKeyDown={handleInputKeyDown}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         placeholder="Ask a question about university governance…"
@@ -167,10 +252,50 @@ function SearchBar({
 }
 
 // ---------------------------------------------------------------------------
-// Example chips (only shown in idle state)
+// Loading status line — cycles through phases beneath the search bar.
+// ---------------------------------------------------------------------------
+
+function StatusLine() {
+  const { loading } = useApp()
+  const [phase, setPhase] = useState(0)
+
+  useEffect(() => {
+    if (!loading) {
+      setPhase(0)
+      return
+    }
+    const id = setInterval(() => {
+      setPhase((p) => (p + 1) % STATUS_PHASES.length)
+    }, 1800)
+    return () => clearInterval(id)
+  }, [loading])
+
+  return (
+    <div className="h-5 mt-3 text-center" aria-live="polite">
+      <AnimatePresence mode="wait">
+        {loading && (
+          <motion.p
+            key={STATUS_PHASES[phase]}
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.25, ease: EASE_OUT_QUART }}
+            className="text-[12px] text-ink-muted tracking-wide"
+          >
+            {STATUS_PHASES[phase]}
+          </motion.p>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Example chips with institution-aware preview
 // ---------------------------------------------------------------------------
 
 function ExampleChips({ onSelect }: { onSelect: (q: string) => void }) {
+  const { institution } = useApp()
   return (
     <div className="flex flex-wrap gap-2 mt-5 justify-center">
       {EXAMPLE_QUERIES.map((q) => (
@@ -178,9 +303,16 @@ function ExampleChips({ onSelect }: { onSelect: (q: string) => void }) {
           key={q}
           type="button"
           onClick={() => onSelect(q)}
-          className="text-xs text-ink-soft px-3 py-1.5 rounded-md border border-rule bg-surface hover:border-rule-strong hover:bg-canvas hover:text-ink hover:-translate-y-px transition-all duration-150 cursor-pointer"
+          title={`Search ${institution}`}
+          className="group relative text-xs text-ink-soft px-3 py-1.5 rounded-md border border-rule bg-surface hover:border-rule-strong hover:bg-canvas hover:text-ink hover:-translate-y-px transition-all duration-150 cursor-pointer"
         >
           {q}
+          <span
+            className="pointer-events-none absolute -top-2 -right-2 text-[9px] font-mono uppercase tracking-wider px-1.5 py-px rounded bg-surface text-ink-soft border border-rule opacity-0 group-hover:opacity-100 transition-opacity duration-150"
+            aria-hidden
+          >
+            {institution}
+          </span>
         </button>
       ))}
     </div>
@@ -188,7 +320,7 @@ function ExampleChips({ onSelect }: { onSelect: (q: string) => void }) {
 }
 
 // ---------------------------------------------------------------------------
-// Result area (loading | result | error)
+// Result area
 // ---------------------------------------------------------------------------
 
 function ResultArea() {
@@ -204,10 +336,6 @@ function ResultArea() {
 }
 
 function AnswerSkeleton() {
-  // Two paragraph groups, separated by extra space, mimic the structure of a
-  // real answer: a body paragraph followed by a shorter "Where to read more"
-  // footer. The shimmer animation passes through each line in sequence via
-  // staggered animation-delay, giving a calm wave instead of a noisy pulse.
   const main = ['92%', '100%', '88%', '76%']
   const footer = ['54%', '38%']
   let delay = 0
@@ -240,19 +368,67 @@ function SkeletonLine({ width, delay }: { width: string; delay: number }) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Streaming answer view
+// ---------------------------------------------------------------------------
+
 function AnswerView({ result }: { result: QueryResponse }) {
-  const blocks = useMemo(() => parseAnswerBlocks(result.answer), [result.answer])
+  const reducedMotion = useReducedMotion()
+  const fullAnswer = result.answer
+  const [revealedLength, setRevealedLength] = useState(
+    reducedMotion ? fullAnswer.length : 0,
+  )
+
+  // Client-side streaming reveal. Even though the backend doesn't stream, the
+  // reveal makes the answer feel like it's being composed rather than dumped.
+  // On `prefers-reduced-motion`, render instantly.
+  useEffect(() => {
+    if (reducedMotion) {
+      setRevealedLength(fullAnswer.length)
+      return
+    }
+    setRevealedLength(0)
+    let raf = 0
+    let startTime: number | null = null
+
+    function tick(now: number) {
+      if (startTime === null) startTime = now
+      const elapsed = (now - startTime) / 1000
+      const target = Math.min(
+        Math.ceil(elapsed * STREAM_CHARS_PER_SECOND),
+        fullAnswer.length,
+      )
+      setRevealedLength(target)
+      if (target < fullAnswer.length) {
+        raf = requestAnimationFrame(tick)
+      }
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [fullAnswer, reducedMotion])
+
+  const visibleAnswer = useMemo(
+    () => fullAnswer.slice(0, revealedLength),
+    [fullAnswer, revealedLength],
+  )
+  const blocks = useMemo(
+    () => parseAnswerBlocks(visibleAnswer),
+    [visibleAnswer],
+  )
   const sourceKeys = useMemo(
     () => new Set(result.sources.map(matchKeyOf)),
     [result.sources],
   )
 
-  // Detect the trailing "Where to read more" footer block (a stable convention
-  // in the prompt) so we can render it as a clearly demarcated metadata block
-  // instead of mixing it into the body prose.
-  const footerIdx = blocks.findIndex(
-    (b) => b.type === 'paragraph' && b.text.toLowerCase().startsWith('where to read more'),
-  )
+  // Only promote the "Where to read more" footer once the stream completes —
+  // otherwise the footer heading would pop into a divided block mid-reveal.
+  const fullyRevealed = revealedLength >= fullAnswer.length
+  const footerIdx = fullyRevealed
+    ? blocks.findIndex(
+        (b) =>
+          b.type === 'paragraph' && b.text.toLowerCase().startsWith('where to read more'),
+      )
+    : -1
   const hasFooter = footerIdx >= 0
   const body = hasFooter ? blocks.slice(0, footerIdx) : blocks
   const footer = hasFooter ? blocks[footerIdx] : null
@@ -262,8 +438,9 @@ function AnswerView({ result }: { result: QueryResponse }) {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.28, ease: EASE_OUT_QUART }}
-      className="text-[16px] leading-[1.75] text-ink"
+      className="group relative text-[16px] leading-[1.75] text-ink"
     >
+      <CopyButton text={fullAnswer} disabled={!fullyRevealed} />
       <div className="space-y-5">
         {body.map((block, i) => (
           <BlockView key={`b-${i}`} block={block} sourceKeys={sourceKeys} />
@@ -295,10 +472,17 @@ function BlockView({
       </p>
     )
   }
+  if (block.type === 'heading') {
+    return (
+      <h3 className="text-[17px] font-semibold tracking-tight text-ink mt-1 leading-snug">
+        <InlineRender text={block.text} sourceKeys={sourceKeys} />
+      </h3>
+    )
+  }
   return (
-    <ul className="list-disc list-outside pl-5 space-y-1.5 marker:text-ink-muted">
+    <ul className="list-disc list-outside pl-5 space-y-2 marker:text-ink-muted">
       {block.items.map((item, i) => (
-        <li key={i}>
+        <li key={i} className="pl-1">
           <InlineRender text={item} sourceKeys={sourceKeys} />
         </li>
       ))}
@@ -343,6 +527,44 @@ function InlineRender({
   )
 }
 
+// ---------------------------------------------------------------------------
+// Copy button (top-right of answer, hover-revealed)
+// ---------------------------------------------------------------------------
+
+function CopyButton({ text, disabled = false }: { text: string; disabled?: boolean }) {
+  const [copied, setCopied] = useState(false)
+
+  async function handleCopy() {
+    if (disabled) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch (err) {
+      console.error('[PolicyLens] Copy failed:', err)
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      disabled={disabled}
+      aria-label="Copy answer"
+      className={
+        'absolute -top-1 right-0 text-[11px] font-mono uppercase tracking-wider ' +
+        'px-2 py-1 rounded-md border border-rule bg-surface text-ink-muted ' +
+        'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 ' +
+        'hover:text-ink hover:border-rule-strong ' +
+        'transition-opacity duration-150 cursor-pointer ' +
+        'disabled:opacity-0 disabled:cursor-default'
+      }
+    >
+      {copied ? 'Copied' : 'Copy'}
+    </button>
+  )
+}
+
 function ErrorView() {
   return (
     <p className="text-sm text-ink-soft leading-relaxed">
@@ -353,7 +575,7 @@ function ErrorView() {
 }
 
 // ---------------------------------------------------------------------------
-// Inline icon (no icon library — keeps deps minimal)
+// Inline icon
 // ---------------------------------------------------------------------------
 
 function SearchIcon({ className = '' }: { className?: string }) {

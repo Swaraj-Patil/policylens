@@ -6,6 +6,7 @@ import type { AnswerBlock, AnswerToken, Citation } from './types'
 const TOKEN_RE = /\[([^\]]+)\]|\*\*([^*]+)\*\*/g
 const PAGE_RE = /^pp?\.\s*\S/
 const LIST_LINE_RE = /^[-*]\s+/
+const HEADING_RE = /^(#{1,6})\s+(.+)$/
 
 /**
  * Parse a single citation like "<Institution>, <Section Title>, p.<page>".
@@ -81,6 +82,16 @@ export function parseAnswerBlocks(text: string): AnswerBlock[] {
   for (const section of text.split('\n\n')) {
     if (!section.trim()) continue
     const lines = section.split('\n').filter((l) => l.trim().length > 0)
+
+    // Single-line section starting with #..###### → heading.
+    if (lines.length === 1) {
+      const m = lines[0].trim().match(HEADING_RE)
+      if (m) {
+        blocks.push({ type: 'heading', level: m[1].length, text: m[2] })
+        continue
+      }
+    }
+
     if (lines.length > 0 && lines.every((l) => LIST_LINE_RE.test(l.trim()))) {
       const items = lines.map((l) => l.trim().replace(LIST_LINE_RE, ''))
       blocks.push({ type: 'list', items })

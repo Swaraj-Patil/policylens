@@ -1,5 +1,6 @@
-import type { Dispatch, SetStateAction } from 'react'
+import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 import { useApp } from '../state'
+import { matchKeyOf } from '../citations'
 import { ResizeHandle } from './ResizeHandle'
 import { SourceCard } from './SourceCard'
 
@@ -7,12 +8,28 @@ type Props = {
   width: number
   minWidth: number
   maxWidth: number
+  animate: boolean
   setWidth: Dispatch<SetStateAction<number>>
+  onResetWidth: () => void
 }
 
-export function RightInspector({ width, minWidth, maxWidth, setWidth }: Props) {
+export function RightInspector({
+  width,
+  minWidth,
+  maxWidth,
+  animate,
+  setWidth,
+  onResetWidth,
+}: Props) {
   const { currentResult } = useApp()
   const sources = currentResult?.sources ?? []
+
+  // Single-expansion: at most one preview is open at a time. Reset whenever
+  // the result changes so a stale "expanded" state doesn't carry across queries.
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)
+  useEffect(() => {
+    setExpandedKey(null)
+  }, [currentResult])
 
   function handleResize(dx: number) {
     // Right panel grows when its left edge moves leftward (negative dx).
@@ -22,9 +39,12 @@ export function RightInspector({ width, minWidth, maxWidth, setWidth }: Props) {
   return (
     <aside
       style={{ width: `${width}px` }}
-      className="shrink-0 border-l border-rule bg-surface flex flex-col relative"
+      className={
+        'shrink-0 border-l border-rule bg-surface flex flex-col relative ' +
+        (animate ? 'transition-[width] duration-200 ease-out' : '')
+      }
     >
-      <ResizeHandle edge="left" onDelta={handleResize} />
+      <ResizeHandle edge="left" onDelta={handleResize} onReset={onResetWidth} />
 
       <div className="px-5 py-5 border-b border-rule">
         <div className="flex items-baseline justify-between">
@@ -46,13 +66,20 @@ export function RightInspector({ width, minWidth, maxWidth, setWidth }: Props) {
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto divide-y divide-rule">
-          {sources.map((s, i) => (
-            <SourceCard
-              key={`${s.institution}::${s.section_title}::${i}`}
-              source={s}
-              index={i}
-            />
-          ))}
+          {sources.map((s, i) => {
+            const key = `${matchKeyOf(s)}::${i}`
+            return (
+              <SourceCard
+                key={key}
+                source={s}
+                index={i}
+                expanded={expandedKey === key}
+                onToggle={() =>
+                  setExpandedKey((prev) => (prev === key ? null : key))
+                }
+              />
+            )
+          })}
         </div>
       )}
     </aside>

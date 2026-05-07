@@ -44,6 +44,10 @@ class SourceInfo(BaseModel):
     page_start: int
     page_end: int
     flesch_kincaid_grade: float | None = None
+    # Raw chunk text — surfaced so the frontend can render an in-panel preview
+    # of the retrieved passage without a second API call. Defaults to empty so
+    # older clients ignoring this field continue to work.
+    text: str = ""
 
 
 class QueryResponse(BaseModel):
@@ -93,6 +97,7 @@ def query(req: QueryRequest) -> QueryResponse:
                 page_start=c.page_start,
                 page_end=c.page_end,
                 flesch_kincaid_grade=c.flesch_kincaid_grade,
+                text=c.text,
             )
             for c in chunks
         ],

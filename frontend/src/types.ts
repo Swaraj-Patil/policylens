@@ -4,6 +4,8 @@ export type SourceInfo = {
   page_start: number
   page_end: number
   flesch_kincaid_grade: number | null
+  /** Raw chunk text for in-panel preview. Older backends omit this. */
+  text?: string
 }
 
 export type QueryResponse = {
@@ -27,6 +29,7 @@ export type AnswerToken =
 export type AnswerBlock =
   | { type: 'paragraph'; text: string }
   | { type: 'list'; items: string[] }
+  | { type: 'heading'; level: number; text: string }
 
 export type HistoryEntry = {
   query: string

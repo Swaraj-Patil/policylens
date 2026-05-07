@@ -1,21 +1,49 @@
-import { useMemo, type Dispatch, type SetStateAction } from 'react'
+import { useMemo, type CSSProperties, type Dispatch, type SetStateAction } from 'react'
 import { useApp } from '../state'
 import { ResizeHandle } from './ResizeHandle'
 
+// Institutional accent tints — restrained, editorial. Used as:
+//   - a small color dot on every institution row (signals identity at rest)
+//   - a soft tinted background wash on the active row (replaces the generic
+//     indigo highlight when an institution is selected)
 const INSTITUTIONS = [
-  { key: 'Northeastern', label: 'Northeastern University' },
-  { key: 'Boston University', label: 'Boston University' },
-  { key: 'Harvard', label: 'Harvard University' },
+  {
+    key: 'Northeastern',
+    label: 'Northeastern University',
+    tintDot: '#C8102E',
+    tintBg: 'rgba(200, 16, 46, 0.07)',
+  },
+  {
+    key: 'Boston University',
+    label: 'Boston University',
+    tintDot: '#8C0F0F',
+    tintBg: 'rgba(140, 15, 15, 0.07)',
+  },
+  {
+    key: 'Harvard',
+    label: 'Harvard University',
+    tintDot: '#A41E22',
+    tintBg: 'rgba(164, 30, 34, 0.07)',
+  },
 ] as const
 
 type Props = {
   width: number
   minWidth: number
   maxWidth: number
+  animate: boolean
   setWidth: Dispatch<SetStateAction<number>>
+  onResetWidth: () => void
 }
 
-export function LeftSidebar({ width, minWidth, maxWidth, setWidth }: Props) {
+export function LeftSidebar({
+  width,
+  minWidth,
+  maxWidth,
+  animate,
+  setWidth,
+  onResetWidth,
+}: Props) {
   const { institution, setInstitution, history, runQuery, clearHistory } = useApp()
 
   // Show only the current institution's history. Other institutions' entries
@@ -32,7 +60,10 @@ export function LeftSidebar({ width, minWidth, maxWidth, setWidth }: Props) {
   return (
     <aside
       style={{ width: `${width}px` }}
-      className="shrink-0 border-r border-rule bg-surface flex flex-col relative"
+      className={
+        'shrink-0 border-r border-rule bg-surface flex flex-col relative ' +
+        (animate ? 'transition-[width] duration-200 ease-out' : '')
+      }
     >
       <div className="px-5 py-5 border-b border-rule">
         <div className="flex items-center gap-3">
@@ -56,13 +87,15 @@ export function LeftSidebar({ width, minWidth, maxWidth, setWidth }: Props) {
 
       <nav className="flex-1 overflow-y-auto px-3 py-5 space-y-7">
         <Section label="Institution">
-          {INSTITUTIONS.map(({ key, label }) => (
+          {INSTITUTIONS.map((inst) => (
             <SidebarRow
-              key={key}
-              active={institution === key}
-              onClick={() => setInstitution(key)}
+              key={inst.key}
+              active={institution === inst.key}
+              onClick={() => setInstitution(inst.key)}
+              tintDot={inst.tintDot}
+              tintBg={inst.tintBg}
             >
-              {label}
+              {inst.label}
             </SidebarRow>
           ))}
         </Section>
@@ -121,7 +154,7 @@ export function LeftSidebar({ width, minWidth, maxWidth, setWidth }: Props) {
         </button>
       </div>
 
-      <ResizeHandle edge="right" onDelta={handleResize} />
+      <ResizeHandle edge="right" onDelta={handleResize} onReset={onResetWidth} />
     </aside>
   )
 }
@@ -152,24 +185,38 @@ function SidebarRow({
   children,
   active = false,
   onClick,
+  tintDot,
+  tintBg,
 }: {
   children: React.ReactNode
   active?: boolean
   onClick?: () => void
+  tintDot?: string
+  tintBg?: string
 }) {
   if (onClick) {
+    const style: CSSProperties | undefined =
+      active && tintBg ? { backgroundColor: tintBg } : undefined
     return (
       <button
         type="button"
         onClick={onClick}
+        style={style}
         className={
-          'block w-full text-left px-2 py-1.5 rounded-md text-sm select-none cursor-pointer transition-colors focus:outline-none focus-visible:bg-canvas focus-visible:text-ink ' +
+          'flex items-center gap-2 w-full text-left px-2 py-1.5 rounded-md text-sm select-none cursor-pointer transition-colors focus:outline-none focus-visible:bg-canvas focus-visible:text-ink ' +
           (active
-            ? 'bg-highlight text-ink font-semibold'
+            ? 'text-ink font-semibold'
             : 'text-ink-soft hover:bg-canvas hover:text-ink')
         }
       >
-        {children}
+        {tintDot && (
+          <span
+            aria-hidden
+            className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+            style={{ backgroundColor: tintDot, opacity: active ? 1 : 0.55 }}
+          />
+        )}
+        <span className="truncate">{children}</span>
       </button>
     )
   }
