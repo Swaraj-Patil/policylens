@@ -6,52 +6,68 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
-  type FormEvent,
-  type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { useApp } from '../state'
-import type { AnswerBlock, ErrorKind, QueryResponse } from '../types'
+import type { AnswerBlock, AnswerEntry, ErrorKind, QueryResponse } from '../types'
 import { matchKeyOf, parseAnswerBlocks, tokenizeAnswer } from '../citations'
+import { institutionByKey } from '../institutions'
 import { CitationChip } from './CitationChip'
+import { SearchComposer } from './SearchComposer'
+import { MOTION } from '../motion'
 
 const EXAMPLE_QUERIES = [
   'What are the rules for outside consulting?',
   'How are faculty senate elections conducted?',
   'What protections exist for academic freedom?',
   'What is the grievance procedure for tenure disputes?',
+  'What accommodations are available for students with disabilities?',
 ] as const
 
-const STATUS_PHASES = [
+const STATUS_PHASES_FAST = [
   'Searching governance documents…',
   'Analyzing relevant passages…',
   'Synthesizing grounded answer…',
 ] as const
 
-const EASE_OUT_QUART: [number, number, number, number] = [0.16, 1, 0.3, 1]
-const EASE_INOUT_SOFT: [number, number, number, number] = [0.42, 0, 0.58, 1]
+const STATUS_PHASE_LONG =
+  'Large language model is reasoning over retrieved passages…'
+const STATUS_PHASE_VERY_LONG =
+  'Still working — some institutional documents are lengthy.'
 
 // Char-per-second target for the answer stream-in. ~25 chars/frame at 60fps.
 const STREAM_CHARS_PER_SECOND = 1500
 
-// Confidence heuristic — phrases that imply the model declined to answer.
-// Kept liberal so a soft "I don't have specific information" still de-rates
-// the answer's confidence. Matched case-insensitively.
 const FALLBACK_PHRASE_RE =
   /\b(i (don'?t|do not) have (enough|specific)|could not (determine|find)|no (relevant|information)|insufficient (information|context)|cannot (determine|answer))\b/i
 
 type ConfidenceLevel = 'high' | 'moderate' | 'limited'
 
+// ---------------------------------------------------------------------------
+// CenterPanel — composer + idle hero OR composer + answer stack.
+// ---------------------------------------------------------------------------
+
 export function CenterPanel() {
-  const { currentQuery, runQuery } = useApp()
-  const [value, setValue] = useState('')
-  const showIdle = currentQuery === null
+  const { entries, runQuery, institution } = useApp()
+  const [composerValue, setComposerValue] = useState('')
+  const showIdle = entries.length === 0
+
+  // Clear the composer when the user switches institutions. The timeline and
+  // active entry are preserved (each entry remembers its own institution),
+  // but the in-progress draft belongs to the prior context and shouldn't
+  // bleed into the new one.
+  const prevInstRef = useRef(institution)
+  useEffect(() => {
+    if (prevInstRef.current !== institution) {
+      setComposerValue('')
+      prevInstRef.current = institution
+    }
+  }, [institution])
 
   const submitQuery = useCallback(
     (q: string) => {
-      setValue(q)
+      setComposerValue(q)
       runQuery(q)
     },
     [runQuery],
@@ -64,44 +80,60 @@ export function CenterPanel() {
         (showIdle ? 'items-center justify-center py-16' : 'py-10')
       }
     >
-      <div className="w-full max-w-[680px] mx-auto">
-        {showIdle && <IdleHero />}
+      <div className="w-full max-w-[720px] mx-auto">
+        {showIdle && <IdleHero onSelect={submitQuery} />}
 
-        <SearchBar value={value} onChange={setValue} onSubmit={submitQuery} />
+        <SearchComposer
+          value={composerValue}
+          onChange={setComposerValue}
+          onSubmit={submitQuery}
+        />
 
         <StatusLine />
-        <QueryMetaStrip />
 
-        {showIdle && <ExampleChips onSelect={submitQuery} />}
-        {!showIdle && <ResultArea />}
+        {!showIdle && <AnswerStack />}
       </div>
     </div>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Idle hero — with a barely-there ambient float
+// Idle hero — rotating example queries with institution tag. "Try asking…"
+// presentation, ambient breath. Single visible query at a time so the eye
+// doesn't have to scan a chip cloud.
 // ---------------------------------------------------------------------------
 
-function IdleHero() {
+function IdleHero({ onSelect }: { onSelect: (q: string) => void }) {
   const reducedMotion = useReducedMotion()
+  const { institution } = useApp()
+  const inst = institutionByKey(institution)
+  const [exampleIdx, setExampleIdx] = useState(0)
 
-  // ~6s loop, ±2px — at the edge of perception. Anything more becomes
-  // distracting in peripheral vision while a user is reading. Entry fade is
-  // opacity-only so the breathing can own the y axis without a "jump-in".
+  // Rotate every 4.5s. Reduced-motion users see the static first example
+  // (no rotation, no breathing).
+  useEffect(() => {
+    if (reducedMotion) return
+    const id = setInterval(() => {
+      setExampleIdx((i) => (i + 1) % EXAMPLE_QUERIES.length)
+    }, 4500)
+    return () => clearInterval(id)
+  }, [reducedMotion])
+
+  const example = EXAMPLE_QUERIES[exampleIdx]
+
   return (
     <motion.header
-      className="text-center mb-12"
+      className="text-center mb-10"
       initial={{ opacity: 0 }}
       animate={
         reducedMotion ? { opacity: 1 } : { opacity: 1, y: [0, -2, 0] }
       }
       transition={
         reducedMotion
-          ? { duration: 0.45, ease: EASE_OUT_QUART }
+          ? { duration: 0.45, ease: MOTION.ease }
           : {
-              opacity: { duration: 0.45, ease: EASE_OUT_QUART },
-              y: { duration: 6, ease: EASE_INOUT_SOFT, repeat: Infinity },
+              opacity: { duration: 0.45, ease: MOTION.ease },
+              y: { duration: 6, ease: MOTION.easeInOut, repeat: Infinity },
             }
       }
     >
@@ -112,191 +144,98 @@ function IdleHero() {
         Plain-language search across institutional governance documents. Answers
         cite the exact section and page they come from.
       </p>
+
+      <div className="mt-9">
+        <p className="text-[10px] uppercase tracking-[0.18em] text-ink-muted mb-3">
+          Try asking
+        </p>
+        <div className="h-12 relative" aria-live="polite">
+          <AnimatePresence mode="wait">
+            <motion.button
+              key={example}
+              type="button"
+              onClick={() => onSelect(example)}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.35, ease: MOTION.ease }}
+              className="group absolute inset-0 inline-flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <span className="text-[15px] text-ink-soft group-hover:text-ink transition-colors duration-150 italic">
+                "{example}"
+              </span>
+              {inst && (
+                <span
+                  aria-hidden
+                  className="inline-flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded border border-rule text-ink-muted opacity-70 group-hover:opacity-100 transition-opacity duration-150"
+                >
+                  <span
+                    className="inline-block w-1 h-1 rounded-full"
+                    style={{ backgroundColor: inst.tintDot }}
+                  />
+                  {inst.short}
+                </span>
+              )}
+            </motion.button>
+          </AnimatePresence>
+        </div>
+      </div>
     </motion.header>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Search bar (with keyboard-first workflow)
-// ---------------------------------------------------------------------------
-
-function SearchBar({
-  value,
-  onChange,
-  onSubmit,
-}: {
-  value: string
-  onChange: (v: string) => void
-  onSubmit: (q: string) => void
-}) {
-  const { loading, currentQuery, history, institution } = useApp()
-  const inputRef = useRef<HTMLInputElement>(null)
-  const [focused, setFocused] = useState(false)
-
-  const scopedHistory = useMemo(
-    () => history.filter((e) => e.institution === institution),
-    [history, institution],
-  )
-
-  const [historyIndex, setHistoryIndex] = useState(-1)
-  const savedValueRef = useRef('')
-
-  useEffect(() => {
-    inputRef.current?.focus()
-  }, [])
-
-  useEffect(() => {
-    if (currentQuery !== null && currentQuery !== value) {
-      onChange(currentQuery)
-    }
-  }, [currentQuery, value, onChange])
-
-  useEffect(() => {
-    setHistoryIndex(-1)
-    savedValueRef.current = ''
-  }, [currentQuery])
-
-  useEffect(() => {
-    function handler(e: KeyboardEvent) {
-      const isMod = e.metaKey || e.ctrlKey
-
-      if (isMod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        inputRef.current?.focus()
-        inputRef.current?.select()
-        return
-      }
-      if (e.key === '/') {
-        const tag = (document.activeElement?.tagName || '').toLowerCase()
-        if (tag === 'input' || tag === 'textarea') return
-        e.preventDefault()
-        inputRef.current?.focus()
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [])
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault()
-    const q = value.trim()
-    if (!q || loading) return
-    setHistoryIndex(-1)
-    savedValueRef.current = ''
-    onSubmit(q)
-  }
-
-  function handleInputKeyDown(e: ReactKeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Escape') {
-      if (loading) return
-      if (value !== '') {
-        e.preventDefault()
-        onChange('')
-        setHistoryIndex(-1)
-        savedValueRef.current = ''
-        return
-      }
-      e.preventDefault()
-      inputRef.current?.blur()
-      return
-    }
-
-    if (e.key === 'ArrowUp') {
-      if (loading || scopedHistory.length === 0) return
-      const next = historyIndex + 1
-      if (next >= scopedHistory.length) return
-      e.preventDefault()
-      if (historyIndex === -1) savedValueRef.current = value
-      setHistoryIndex(next)
-      onChange(scopedHistory[next].query)
-      return
-    }
-
-    if (e.key === 'ArrowDown') {
-      if (loading) return
-      if (historyIndex === -1) return
-      e.preventDefault()
-      const next = historyIndex - 1
-      setHistoryIndex(next)
-      onChange(next === -1 ? savedValueRef.current : scopedHistory[next].query)
-      return
-    }
-  }
-
-  function handleInputChange(e: ChangeEvent<HTMLInputElement>) {
-    if (historyIndex !== -1) setHistoryIndex(-1)
-    onChange(e.target.value)
-  }
-
-  return (
-    <motion.form
-      onSubmit={handleSubmit}
-      animate={{ scale: focused ? 1.005 : 1 }}
-      transition={{ duration: 0.18, ease: EASE_OUT_QUART }}
-      className={
-        'relative h-14 rounded-lg bg-surface border ' +
-        'flex items-center px-4 gap-3 ' +
-        'transition-shadow duration-200 ' +
-        (focused
-          ? 'border-rule-strong shadow-card-hover'
-          : 'border-rule shadow-card')
-      }
-    >
-      <SearchIcon className="w-4 h-4 text-ink-muted shrink-0" />
-      <input
-        ref={inputRef}
-        type="text"
-        value={value}
-        onChange={handleInputChange}
-        onKeyDown={handleInputKeyDown}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
-        placeholder="Ask a question about university governance…"
-        spellCheck={false}
-        autoComplete="off"
-        className="flex-1 bg-transparent outline-none text-[15px] text-ink placeholder:text-ink-muted"
-      />
-      {!focused && value === '' && (
-        <kbd className="hidden sm:inline-flex text-[11px] font-mono text-ink-muted px-1.5 py-0.5 rounded border border-rule select-none">
-          /
-        </kbd>
-      )}
-    </motion.form>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Loading status line — cycles through phases beneath the search bar.
+// Smart status line — phases react to elapsed time. <8s cycles the original
+// three; 8–20s settles on the "model is reasoning" line; 20s+ acknowledges
+// the wait.
 // ---------------------------------------------------------------------------
 
 function StatusLine() {
   const { loading } = useApp()
   const [phase, setPhase] = useState(0)
+  const [elapsed, setElapsed] = useState(0)
+  const startedAtRef = useRef<number>(0)
 
   useEffect(() => {
     if (!loading) {
       setPhase(0)
+      setElapsed(0)
       return
     }
-    const id = setInterval(() => {
-      setPhase((p) => (p + 1) % STATUS_PHASES.length)
+    startedAtRef.current = Date.now()
+    setElapsed(0)
+    setPhase(0)
+    const phaseTimer = setInterval(() => {
+      setPhase((p) => (p + 1) % STATUS_PHASES_FAST.length)
     }, 1800)
-    return () => clearInterval(id)
+    const elapsedTimer = setInterval(() => {
+      setElapsed(Date.now() - startedAtRef.current)
+    }, 500)
+    return () => {
+      clearInterval(phaseTimer)
+      clearInterval(elapsedTimer)
+    }
   }, [loading])
+
+  const message = useMemo(() => {
+    if (elapsed >= 20_000) return STATUS_PHASE_VERY_LONG
+    if (elapsed >= 8_000) return STATUS_PHASE_LONG
+    return STATUS_PHASES_FAST[phase]
+  }, [elapsed, phase])
 
   return (
     <div className="h-5 mt-3 text-center" aria-live="polite">
       <AnimatePresence mode="wait">
         {loading && (
           <motion.p
-            key={STATUS_PHASES[phase]}
+            key={message}
             initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.25, ease: EASE_OUT_QUART }}
+            transition={MOTION.quick}
             className="text-[12px] text-ink-muted tracking-wide"
           >
-            {STATUS_PHASES[phase]}
+            {message}
           </motion.p>
         )}
       </AnimatePresence>
@@ -305,40 +244,217 @@ function StatusLine() {
 }
 
 // ---------------------------------------------------------------------------
-// Query metadata strip — institution · sources · elapsed · last updated.
-// Sits below the search bar once a query has resolved (success OR error).
+// Answer stack — newest at top. Active entry expanded; older ones collapse
+// into a one-line glance card that activates on click.
 // ---------------------------------------------------------------------------
 
-function QueryMetaStrip() {
-  const { loading, currentQuery, currentResult, errorKind, elapsedMs, lastUpdatedAt, institution } =
-    useApp()
+function AnswerStack() {
+  const { entries, activeEntryId } = useApp()
+  return (
+    <div className="mt-8 space-y-4">
+      <AnimatePresence initial={false}>
+        {entries.map((entry, i) => (
+          <motion.div
+            key={entry.id}
+            layout
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{
+              ...MOTION.enter,
+              delay: i === 0 ? 0 : Math.min(i * MOTION.stagger, 0.2),
+            }}
+          >
+            <AnswerCard
+              entry={entry}
+              isActive={entry.id === activeEntryId}
+              isNewest={i === 0}
+            />
+          </motion.div>
+        ))}
+      </AnimatePresence>
+    </div>
+  )
+}
 
-  // Show after a query has been fired and is no longer loading. This covers
-  // the success path AND error/empty states — the strip is always informative.
-  const visible = !loading && currentQuery !== null
+function AnswerCard({
+  entry,
+  isActive,
+}: {
+  entry: AnswerEntry
+  isActive: boolean
+  isNewest: boolean
+}) {
+  const { setActiveEntryId } = useApp()
+  const inst = institutionByKey(entry.institution)
+  const borderColor = isActive ? inst?.tintAccent : 'transparent'
 
-  if (!visible) return null
+  if (!isActive) {
+    return <CollapsedAnswerCard entry={entry} onActivate={() => setActiveEntryId(entry.id)} />
+  }
 
-  const sourceCount = currentResult?.sources?.length ?? 0
-  const elapsedLabel = elapsedMs !== null ? formatElapsed(elapsedMs) : null
-  const relativeLabel = lastUpdatedAt !== null ? formatRelative(lastUpdatedAt) : null
+  return (
+    <motion.section
+      layout
+      style={{ borderLeftColor: borderColor }}
+      className={
+        'relative rounded-md bg-surface border border-rule shadow-card ' +
+        'border-l-2 px-7 py-6 ' +
+        'transition-shadow duration-200'
+      }
+    >
+      <ActiveQueryHeader entry={entry} />
+      <ActiveAnswerBody entry={entry} />
+    </motion.section>
+  )
+}
 
-  const parts: string[] = [institution]
-  if (errorKind === null && sourceCount > 0) {
+function ActiveQueryHeader({ entry }: { entry: AnswerEntry }) {
+  return (
+    <div className="mb-5">
+      <p className="text-[10px] uppercase tracking-[0.14em] text-ink-muted">
+        Question
+      </p>
+      <h3 className="text-[18px] font-semibold tracking-tight text-ink leading-snug mt-1.5">
+        {entry.query}
+      </h3>
+      <QueryMetaStrip entry={entry} />
+    </div>
+  )
+}
+
+function ActiveAnswerBody({ entry }: { entry: AnswerEntry }) {
+  const { loading } = useApp()
+  if (loading && !entry.result && !entry.errorKind) {
+    return <AnswerSkeleton />
+  }
+  if (entry.errorKind) {
+    return <EmptyView kind={entry.errorKind} />
+  }
+  if (entry.result) {
+    return <AnswerView entry={entry} />
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Collapsed card — shows query + small confidence dot + source count + when.
+// One row, clickable, subtle hover lift. Reads as a research-session log row
+// rather than a chat bubble.
+// ---------------------------------------------------------------------------
+
+function CollapsedAnswerCard({
+  entry,
+  onActivate,
+}: {
+  entry: AnswerEntry
+  onActivate: () => void
+}) {
+  const inst = institutionByKey(entry.institution)
+  const sourceCount = entry.result?.sources?.length ?? 0
+  const confidence = entry.result ? computeConfidence(entry.result) : null
+  const dotColor =
+    confidence === 'high'
+      ? 'bg-accent'
+      : confidence === 'moderate'
+        ? 'bg-ink-muted'
+        : 'bg-ink-muted/40'
+
+  const elapsedLabel = entry.elapsedMs !== null ? formatElapsed(entry.elapsedMs) : null
+  const tag =
+    entry.errorKind === 'no_results'
+      ? 'no sources'
+      : entry.errorKind
+        ? 'error'
+        : `${sourceCount} source${sourceCount === 1 ? '' : 's'}`
+
+  return (
+    <motion.button
+      type="button"
+      onClick={onActivate}
+      whileHover={{ y: -1 }}
+      transition={MOTION.quick}
+      className={
+        'group block w-full text-left rounded-md bg-surface/80 border border-rule ' +
+        'px-5 py-3 cursor-pointer ' +
+        'hover:border-rule-strong hover:bg-surface hover:shadow-card ' +
+        'transition-[background,border,box-shadow] duration-200'
+      }
+      title="Open this answer"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 flex-1 flex items-center gap-3">
+          {confidence ? (
+            <span
+              aria-hidden
+              className={'inline-block w-1.5 h-1.5 rounded-full shrink-0 ' + dotColor}
+            />
+          ) : (
+            <span aria-hidden className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-ink-muted/30" />
+          )}
+          <span className="text-[14px] text-ink truncate group-hover:text-ink">
+            {entry.query}
+          </span>
+        </div>
+        <div className="shrink-0 flex items-center gap-2 text-[11px] text-ink-muted font-mono">
+          {inst && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-rule"
+              title={inst.label}
+            >
+              <span
+                aria-hidden
+                className="inline-block w-1 h-1 rounded-full"
+                style={{ backgroundColor: inst.tintDot }}
+              />
+              <span className="uppercase tracking-wider">{inst.short}</span>
+            </span>
+          )}
+          <span>{tag}</span>
+          {elapsedLabel && (
+            <>
+              <span aria-hidden className="text-ink-muted/40">·</span>
+              <span>{elapsedLabel}</span>
+            </>
+          )}
+        </div>
+      </div>
+    </motion.button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Query metadata strip — institution · sources · elapsed · last updated.
+// Lives inside each ActiveQueryHeader (per-entry) so its info doesn't slide
+// when the active entry changes.
+// ---------------------------------------------------------------------------
+
+function QueryMetaStrip({ entry }: { entry: AnswerEntry }) {
+  const sourceCount = entry.result?.sources?.length ?? 0
+  const elapsedLabel = entry.elapsedMs !== null ? formatElapsed(entry.elapsedMs) : null
+  const relativeLabel =
+    entry.completedAt !== null ? formatRelative(entry.completedAt) : null
+
+  const parts: string[] = [entry.institution]
+  if (entry.errorKind === null && sourceCount > 0) {
     parts.push(`${sourceCount} ${sourceCount === 1 ? 'source' : 'sources'} retrieved`)
-  } else if (errorKind === 'no_results') {
+  } else if (entry.errorKind === 'no_results') {
     parts.push('no sources retrieved')
   }
   if (elapsedLabel) parts.push(`searched in ${elapsedLabel}`)
-  if (relativeLabel && errorKind === null) parts.push(relativeLabel)
+  if (relativeLabel && entry.errorKind === null) parts.push(relativeLabel)
+
+  if (entry.completedAt === null && entry.errorKind === null) {
+    // In-flight — strip is empty. The status line covers state.
+    return null
+  }
 
   return (
     <motion.div
-      key={`${currentQuery}-${lastUpdatedAt}`}
-      initial={{ opacity: 0, y: 2 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, ease: EASE_OUT_QUART, delay: 0.4 }}
-      className="mt-3 text-center text-[11px] text-ink-muted tracking-wide select-none"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.35, ease: MOTION.ease, delay: 0.4 }}
+      className="mt-3 text-[11px] text-ink-muted tracking-wide select-none"
     >
       {parts.map((p, i) => (
         <Fragment key={i}>
@@ -361,58 +477,14 @@ function formatRelative(ts: number): string {
   if (diff < 60_000) return 'less than a minute ago'
   const min = Math.floor(diff / 60_000)
   if (min < 60) return `${min} min ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr} hr ago`
   return 'earlier'
 }
 
 // ---------------------------------------------------------------------------
-// Example chips with institution-aware preview
+// Skeleton (loading)
 // ---------------------------------------------------------------------------
-
-function ExampleChips({ onSelect }: { onSelect: (q: string) => void }) {
-  const { institution } = useApp()
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.4, ease: EASE_OUT_QUART, delay: 0.25 }}
-      className="flex flex-wrap gap-2 mt-5 justify-center"
-    >
-      {EXAMPLE_QUERIES.map((q) => (
-        <button
-          key={q}
-          type="button"
-          onClick={() => onSelect(q)}
-          title={`Search ${institution}`}
-          className="group relative text-xs text-ink-soft px-3 py-1.5 rounded-md border border-rule bg-surface hover:border-rule-strong hover:bg-canvas hover:text-ink hover:-translate-y-px transition-all duration-150 cursor-pointer"
-        >
-          {q}
-          <span
-            className="pointer-events-none absolute -top-2 -right-2 text-[9px] font-mono uppercase tracking-wider px-1.5 py-px rounded bg-surface text-ink-soft border border-rule opacity-0 group-hover:opacity-100 transition-opacity duration-150"
-            aria-hidden
-          >
-            {institution}
-          </span>
-        </button>
-      ))}
-    </motion.div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Result area — dispatches between skeleton, error, empty, and answer.
-// ---------------------------------------------------------------------------
-
-function ResultArea() {
-  const { loading, currentResult, errorKind } = useApp()
-
-  return (
-    <div className="mt-8">
-      {loading && <AnswerSkeleton />}
-      {!loading && errorKind && <EmptyView kind={errorKind} />}
-      {!loading && !errorKind && currentResult && <AnswerView result={currentResult} />}
-    </div>
-  )
-}
 
 function AnswerSkeleton() {
   const main = ['92%', '100%', '88%', '76%']
@@ -448,19 +520,24 @@ function SkeletonLine({ width, delay }: { width: string; delay: number }) {
 }
 
 // ---------------------------------------------------------------------------
-// Streaming answer view
+// Streaming answer view — per-entry. Streams once (via entry.streamed flag),
+// then renders fully revealed on every subsequent activation/reload.
 // ---------------------------------------------------------------------------
 
-function AnswerView({ result }: { result: QueryResponse }) {
+function AnswerView({ entry }: { entry: AnswerEntry }) {
   const reducedMotion = useReducedMotion()
+  const { markEntryStreamed } = useApp()
+  const result = entry.result!
   const fullAnswer = result.answer
   const articleRef = useRef<HTMLElement>(null)
+
+  const skipReveal = reducedMotion || entry.streamed
   const [revealedLength, setRevealedLength] = useState(
-    reducedMotion ? fullAnswer.length : 0,
+    skipReveal ? fullAnswer.length : 0,
   )
 
   useEffect(() => {
-    if (reducedMotion) {
+    if (skipReveal) {
       setRevealedLength(fullAnswer.length)
       return
     }
@@ -478,11 +555,13 @@ function AnswerView({ result }: { result: QueryResponse }) {
       setRevealedLength(target)
       if (target < fullAnswer.length) {
         raf = requestAnimationFrame(tick)
+      } else {
+        markEntryStreamed(entry.id)
       }
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [fullAnswer, reducedMotion])
+  }, [fullAnswer, skipReveal, entry.id, markEntryStreamed])
 
   const visibleAnswer = useMemo(
     () => fullAnswer.slice(0, revealedLength),
@@ -513,15 +592,15 @@ function AnswerView({ result }: { result: QueryResponse }) {
   return (
     <motion.article
       ref={articleRef}
-      initial={{ opacity: 0, y: 8 }}
+      initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.28, ease: EASE_OUT_QUART }}
-      className="group relative text-[16px] leading-[1.75] text-ink"
+      transition={MOTION.enter}
+      className="group relative text-[16px] leading-[1.78] text-ink"
     >
-      <div className="mb-5">
+      <div className="mb-5 flex items-center justify-between gap-3">
         <ConfidencePill level={confidence} />
+        <CopyButton text={fullAnswer} disabled={!fullyRevealed} />
       </div>
-      <CopyButton text={fullAnswer} disabled={!fullyRevealed} />
 
       <EvidenceRail
         articleRef={articleRef}
@@ -529,7 +608,7 @@ function AnswerView({ result }: { result: QueryResponse }) {
         enabled={fullyRevealed}
       />
 
-      <div className="space-y-5">
+      <div className="space-y-6">
         {body.map((block, i) => (
           <BlockView key={`b-${i}`} block={block} sourceKeys={sourceKeys} />
         ))}
@@ -537,7 +616,7 @@ function AnswerView({ result }: { result: QueryResponse }) {
 
       {footer !== null && (
         <div className="mt-8 pt-5 border-t border-rule">
-          <div className="text-[13px] text-ink-soft leading-[1.65]">
+          <div className="text-[13px] text-ink-soft leading-[1.7]">
             <BlockView block={footer} sourceKeys={sourceKeys} />
           </div>
         </div>
@@ -562,13 +641,13 @@ function BlockView({
   }
   if (block.type === 'heading') {
     return (
-      <h3 className="text-[17px] font-semibold tracking-tight text-ink mt-1 leading-snug">
+      <h3 className="text-[18px] font-semibold tracking-[-0.005em] text-ink mt-2 leading-snug font-serif-display">
         <InlineRender text={block.text} sourceKeys={sourceKeys} />
       </h3>
     )
   }
   return (
-    <ul className="list-disc list-outside pl-5 space-y-2 marker:text-ink-muted">
+    <ul className="list-disc list-outside pl-5 space-y-2.5 marker:text-ink-muted">
       {block.items.map((item, i) => (
         <li key={i} className="pl-1">
           <InlineRender text={item} sourceKeys={sourceKeys} />
@@ -622,11 +701,9 @@ function InlineRender({
 function computeConfidence(result: QueryResponse): ConfidenceLevel {
   const ans = result.answer
   if (FALLBACK_PHRASE_RE.test(ans)) return 'limited'
-
   const citationCount = (ans.match(/\[[^\]]+\]/g) || []).length
   const sourceCount = result.sources.length
   const ansLen = ans.length
-
   if (citationCount === 0 || sourceCount === 0) return 'limited'
   if (sourceCount >= 3 && citationCount >= 2 && ansLen > 200) return 'high'
   return 'moderate'
@@ -640,8 +717,6 @@ function ConfidencePill({ level }: { level: ConfidenceLevel }) {
         ? 'Moderate confidence'
         : 'Limited evidence'
 
-  // Editorial palette — indigo tint = high, slate fill = moderate, faint
-  // outline = limited. No green/yellow/red, no percentages, no AI language.
   const cls =
     level === 'high'
       ? 'bg-accent/10 text-accent-strong border-accent/20'
@@ -682,11 +757,7 @@ function ConfidencePill({ level }: { level: ConfidenceLevel }) {
 }
 
 // ---------------------------------------------------------------------------
-// Evidence rail — minimap-style margin annotation aligned to citation Y-pos.
-// Renders dots at the vertical position of each matched citation chip in the
-// article. Hovering a dot lights up the corresponding source-card link;
-// clicking it opens that source. Hidden until the answer fully reveals so
-// dots don't shift around mid-stream.
+// Evidence rail
 // ---------------------------------------------------------------------------
 
 type RailMarker = { key: string; top: number }
@@ -754,10 +825,7 @@ function EvidenceRail({
             onMouseLeave={() => setHoveredMatchKey(null)}
             title={m.key.split('::')[1] ?? 'Source'}
             style={{ top: m.top }}
-            className={
-              'absolute left-0 -translate-y-1/2 w-3 h-3 flex items-center justify-center ' +
-              'cursor-pointer'
-            }
+            className="absolute left-0 -translate-y-1/2 w-3 h-3 flex items-center justify-center cursor-pointer"
           >
             <span
               className={
@@ -775,7 +843,7 @@ function EvidenceRail({
 }
 
 // ---------------------------------------------------------------------------
-// Copy button (top-right of answer, hover-revealed)
+// Copy button
 // ---------------------------------------------------------------------------
 
 function CopyButton({ text, disabled = false }: { text: string; disabled?: boolean }) {
@@ -799,7 +867,7 @@ function CopyButton({ text, disabled = false }: { text: string; disabled?: boole
       disabled={disabled}
       aria-label="Copy answer"
       className={
-        'absolute -top-1 right-0 text-[11px] font-mono uppercase tracking-wider ' +
+        'text-[11px] font-mono uppercase tracking-wider ' +
         'px-2 py-1 rounded-md border border-rule bg-surface text-ink-muted ' +
         'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 ' +
         'hover:text-ink hover:border-rule-strong ' +
@@ -813,8 +881,7 @@ function CopyButton({ text, disabled = false }: { text: string; disabled?: boole
 }
 
 // ---------------------------------------------------------------------------
-// Empty / error states — differentiated by ErrorKind. Each case has its own
-// tone and helper line; we never expose stack traces or HTTP codes.
+// Empty / error states
 // ---------------------------------------------------------------------------
 
 const EMPTY_COPY: Record<
@@ -848,41 +915,15 @@ const EMPTY_COPY: Record<
 
 function EmptyView({ kind }: { kind: ErrorKind }) {
   const copy = EMPTY_COPY[kind]
-  // Entry fade is JS (so it can be staggered later if needed), but the
-  // ambient breathing is CSS — keeps the animation type-clean and respects
-  // prefers-reduced-motion via the global media query in index.css.
   return (
     <motion.div
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, ease: EASE_OUT_QUART }}
-      className="text-center max-w-[440px] mx-auto py-10"
+      transition={MOTION.enter}
+      className="text-center max-w-[440px] mx-auto py-8"
     >
       <p className="text-[15px] text-ink leading-snug source-breath">{copy.headline}</p>
       <p className="text-[13px] text-ink-soft leading-relaxed mt-3">{copy.helper}</p>
     </motion.div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Inline icon
-// ---------------------------------------------------------------------------
-
-function SearchIcon({ className = '' }: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden
-    >
-      <circle cx="11" cy="11" r="7" />
-      <path d="m20 20-3.5-3.5" />
-    </svg>
   )
 }

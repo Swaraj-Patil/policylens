@@ -2,6 +2,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   type Dispatch,
   type SetStateAction,
 } from 'react'
@@ -17,8 +18,8 @@ type Props = {
   animate: boolean
   setWidth: Dispatch<SetStateAction<number>>
   onResetWidth: () => void
-  /** When the inspector is rendered as a sliding overlay (narrow viewports),
-   *  the resize handle hides and a close affordance appears. */
+  /** Briefly enables width transition on drag-release for a smooth settle. */
+  onDragEnd?: () => void
   asDrawer?: boolean
   onClose?: () => void
 }
@@ -30,6 +31,7 @@ export function RightInspector({
   animate,
   setWidth,
   onResetWidth,
+  onDragEnd,
   asDrawer = false,
   onClose,
 }: Props) {
@@ -38,19 +40,18 @@ export function RightInspector({
     expandedSourceKey,
     setExpandedSourceKey,
     focusedSource,
+    activeEntryId,
   } = useApp()
   const sources = currentResult?.sources ?? []
   const grouped = useMemo(() => groupSources(sources), [sources])
 
-  // Reset expanded card when the result changes — a stale "expanded" key from
-  // a previous query shouldn't persist into a new one.
+  // Reset expanded card when the active entry changes — a stale "expanded"
+  // key from a previous entry's source set is a UX trap.
   useEffect(() => {
     setExpandedSourceKey(null)
-  }, [currentResult, setExpandedSourceKey])
+  }, [activeEntryId, setExpandedSourceKey])
 
-  // Listen for focusSource() requests originating from chip clicks. The
-  // expandedSourceKey effect runs in state.tsx (focusSource sets it directly);
-  // here we only handle the scroll into view.
+  // Scroll-into-view for chip-driven focus.
   const scrollRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!focusedSource) return
@@ -62,8 +63,21 @@ export function RightInspector({
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }, [focusedSource])
 
+  // Subtle scroll-shadow on the sticky header. Drives the affordance that
+  // the source list scrolls below — without an aggressive divider.
+  const [scrolled, setScrolled] = useState(false)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    function onScroll() {
+      if (!el) return
+      setScrolled(el.scrollTop > 4)
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [sources.length])
+
   function handleResize(dx: number) {
-    // Right panel grows when its left edge moves leftward (negative dx).
     setWidth((w) => Math.max(minWidth, Math.min(maxWidth, w - dx)))
   }
 
@@ -71,17 +85,28 @@ export function RightInspector({
     <aside
       style={{ width: `${width}px` }}
       className={
-        'shrink-0 border-l border-rule bg-surface flex flex-col relative h-full ' +
+        'shrink-0 border-l border-rule/70 bg-surface/95 flex flex-col relative h-full ' +
         (animate ? 'transition-[width] duration-200 ease-out' : '')
       }
     >
       {!asDrawer && (
-        <ResizeHandle edge="left" onDelta={handleResize} onReset={onResetWidth} />
+        <ResizeHandle
+          edge="left"
+          onDelta={handleResize}
+          onReset={onResetWidth}
+          onDragEnd={onDragEnd}
+        />
       )}
 
-      <div className="px-5 py-5 border-b border-rule">
+      <div
+        className={
+          'sticky top-0 z-10 px-5 py-5 bg-surface ' +
+          'transition-shadow duration-200 ' +
+          (scrolled ? 'shadow-[0_4px_12px_-8px_rgba(15,23,42,0.18)] border-b border-rule' : 'border-b border-rule/60')
+        }
+      >
         <div className="flex items-baseline justify-between gap-2">
-          <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-soft">
+          <h2 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-soft">
             Sources
           </h2>
           <div className="flex items-center gap-2">
@@ -98,7 +123,7 @@ export function RightInspector({
                 type="button"
                 onClick={onClose}
                 aria-label="Close source panel"
-                className="text-ink-muted hover:text-ink transition-colors cursor-pointer"
+                className="text-ink-muted hover:text-ink transition-colors duration-150 cursor-pointer"
               >
                 <svg
                   viewBox="0 0 24 24"
@@ -116,17 +141,15 @@ export function RightInspector({
             )}
           </div>
         </div>
-        <p className="text-[13px] font-medium text-ink mt-1.5">Citations and source passages</p>
+        <p className="text-[13px] font-medium text-ink mt-1.5 font-serif-display">
+          Citations and source passages
+        </p>
       </div>
 
       {sources.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center px-10 text-center">
-          <p className="text-sm text-ink-muted/90 leading-relaxed max-w-[240px] source-breath">
-            Source passages cited in the answer will appear here.
-          </p>
-        </div>
+        <SourcesEmptyState />
       ) : (
-        <div ref={scrollRef} className="flex-1 overflow-y-auto divide-y divide-rule">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto divide-y divide-rule scrollbar-thin">
           {grouped.map((g, i) => {
             const key = matchKeyOf(g)
             const isExpanded = expandedSourceKey === key
@@ -135,12 +158,10 @@ export function RightInspector({
               <SourceCard
                 key={key}
                 source={g}
-                index={i}
+                rank={i + 1}
                 expanded={isExpanded}
                 pulseKey={isFocused ? focusedSource!.nonce : undefined}
-                onToggle={() =>
-                  setExpandedSourceKey(isExpanded ? null : key)
-                }
+                onToggle={() => setExpandedSourceKey(isExpanded ? null : key)}
               />
             )
           })}
@@ -150,8 +171,39 @@ export function RightInspector({
   )
 }
 
-// CSS.escape polyfill-ish — section_title may contain quotes/colons/etc.
-// We only need quote-safety for the attribute selector built above.
+function SourcesEmptyState() {
+  return (
+    <div className="flex-1 flex items-center justify-center px-10 text-center">
+      <div className="max-w-[240px]">
+        <div className="mx-auto w-10 h-10 rounded-full border border-rule flex items-center justify-center text-ink-muted source-breath">
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <path d="M14 2v6h6" />
+            <path d="M9 14h6" />
+            <path d="M9 18h4" />
+          </svg>
+        </div>
+        <p className="text-[13px] text-ink-soft leading-relaxed mt-4">
+          Source passages cited in the answer will appear here.
+        </p>
+        <p className="text-[12px] text-ink-muted/85 leading-relaxed mt-2">
+          Each result links back to its section and page in the original document.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 function cssEscape(value: string): string {
   if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
     return CSS.escape(value)

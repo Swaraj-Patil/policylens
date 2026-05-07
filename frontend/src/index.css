@@ -10,25 +10,29 @@
   --color-ink-soft: #5B6472;
   --color-ink-muted: #94A3B8;
 
-  /* Rules (borders) */
-  --color-rule: #E2E8F0;
+  /* Rules (borders) — softened slightly so panel boundaries feel layered
+     rather than carved. */
+  --color-rule: #E5E9F0;
   --color-rule-strong: #CBD5E1;
 
-  /* Brand + accent — muted indigo as the active interaction color,
-     pale lavender as the soft "linked" highlight. */
+  /* Brand + accent — muted indigo for active interaction; pale lavender for
+     soft "linked" highlighting. */
   --color-brand: #475569;
   --color-brand-hover: #334155;
   --color-accent: #4F46E5;
   --color-accent-strong: #4338CA;
   --color-highlight: #EEF2FF;
 
-  /* Typography */
+  /* Typography — body Inter, mono JetBrains, display fallback to system serif
+     (Iowan Old Style / Charter / Source Serif 4 if installed). */
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --font-serif-display: "Source Serif 4", "Iowan Old Style", "Apple Garamond", Charter, "Times New Roman", ui-serif, serif;
 
-  /* Shadows */
-  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 0 0 1px rgba(15, 23, 42, 0.04);
-  --shadow-card-hover: 0 4px 12px rgba(15, 23, 42, 0.06), 0 0 0 1px rgba(15, 23, 42, 0.06);
+  /* Shadows — slightly softer to read as cards layered on canvas, not boxes
+     stamped onto a sheet. */
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.035), 0 0 0 1px rgba(15, 23, 42, 0.035);
+  --shadow-card-hover: 0 6px 20px -6px rgba(15, 23, 42, 0.08), 0 0 0 1px rgba(15, 23, 42, 0.05);
 }
 
 html,
@@ -49,9 +53,83 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Faint radial tint on the canvas. Two layered radials approximate diffuse
+   ambient light — weakest at the center where the answer column sits, slightly
+   warmer at the edges. The values are deliberately near-invisible; the goal
+   is "this surface has depth", not visible color. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(79, 70, 229, 0.025), transparent 45%),
+    radial-gradient(circle at 80% 100%, rgba(15, 23, 42, 0.025), transparent 50%);
+}
+
 ::selection {
   background: var(--color-highlight);
   color: var(--color-ink);
+}
+
+/* Editorial display fallback — used on answer headings and source titles so
+   they read as document typography rather than UI labels. */
+.font-serif-display {
+  font-family: var(--font-serif-display);
+  font-feature-settings: "ss01", "kern", "liga";
+}
+
+/* Thin custom scrollbar — tinted, low-contrast at rest, slightly stronger on
+   hover. WebKit only; Firefox falls back to scrollbar-color via the
+   declaration below. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.30);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(148, 163, 184, 0.55);
+  background-clip: padding-box;
+}
+
+/* Apply the same scrollbar treatment to the main scroll containers without
+   needing the class on every flex parent. */
+main, aside, nav {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.30) transparent;
+}
+main::-webkit-scrollbar,
+aside::-webkit-scrollbar,
+nav::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+main::-webkit-scrollbar-thumb,
+aside::-webkit-scrollbar-thumb,
+nav::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+main::-webkit-scrollbar-thumb:hover,
+aside::-webkit-scrollbar-thumb:hover,
+nav::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(148, 163, 184, 0.50);
+  background-clip: padding-box;
 }
 
 /* Skeleton shimmer — slate-200 base with a subtle slate-300 highlight pass.
@@ -73,12 +151,10 @@ body {
   animation: shimmer 2.4s ease-in-out infinite;
 }
 
-/* Source-card attention pulse — fired when a citation chip is clicked.
-   Box-shadow flash + soft background lift, runs once per focus event.
-   Composed alongside the existing color/border transitions on the card. */
+/* Source-card attention pulse — fired when a citation chip is clicked. */
 @keyframes sourcePulse {
   0%   { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); background-color: var(--color-highlight); }
-  20%  { box-shadow: 0 0 0 6px rgba(79, 70, 229, 0.18); }
+  20%  { box-shadow: inset 0 0 0 1px rgba(79, 70, 229, 0.30); }
   100% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); background-color: var(--color-highlight); }
 }
 
@@ -86,9 +162,13 @@ body {
   animation: sourcePulse 1.2s ease-out;
 }
 
-/* Empty-state ambient breathing — used on the inspector's idle copy and on
-   error/empty views in the center panel. Disabled under prefers-reduced-motion
-   via the global media query below. */
+/* Source unfold — a faint top-edge shadow during the height animation gives
+   the expansion an "unfolding paper" cue without a hard divider. */
+.source-unfold {
+  box-shadow: inset 0 1px 0 0 rgba(15, 23, 42, 0.04);
+}
+
+/* Empty-state ambient breathing. */
 @keyframes breathe {
   0%, 100% { opacity: 0.92; }
   50%      { opacity: 1; }

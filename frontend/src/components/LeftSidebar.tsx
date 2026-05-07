@@ -1,34 +1,7 @@
 import { useMemo, type CSSProperties, type Dispatch, type SetStateAction } from 'react'
 import { useApp } from '../state'
+import { INSTITUTIONS } from '../institutions'
 import { ResizeHandle } from './ResizeHandle'
-
-// Institutional accent tints — restrained, editorial. Used as:
-//   - a small color dot on every institution row (signals identity at rest)
-//   - a soft tinted background wash on the active row (replaces the generic
-//     indigo highlight when an institution is selected)
-const INSTITUTIONS = [
-  {
-    key: 'Northeastern',
-    label: 'Northeastern University',
-    short: 'NE',
-    tintDot: '#C8102E',
-    tintBg: 'rgba(200, 16, 46, 0.07)',
-  },
-  {
-    key: 'Boston University',
-    label: 'Boston University',
-    short: 'BU',
-    tintDot: '#8C0F0F',
-    tintBg: 'rgba(140, 15, 15, 0.07)',
-  },
-  {
-    key: 'Harvard',
-    label: 'Harvard University',
-    short: 'HV',
-    tintDot: '#A41E22',
-    tintBg: 'rgba(164, 30, 34, 0.07)',
-  },
-] as const
 
 const RAIL_WIDTH = 56
 
@@ -39,8 +12,10 @@ type Props = {
   animate: boolean
   setWidth: Dispatch<SetStateAction<number>>
   onResetWidth: () => void
-  /** When true the sidebar renders as an icon rail — used at very narrow
-   *  viewports. Width and resize handle are ignored in this mode. */
+  /** Briefly enables width transition on drag-release so the final clamp
+   *  interpolates instead of jumping. */
+  onDragEnd?: () => void
+  /** Icon-rail mode for very narrow viewports. */
   collapsed?: boolean
 }
 
@@ -51,6 +26,7 @@ export function LeftSidebar({
   animate,
   setWidth,
   onResetWidth,
+  onDragEnd,
   collapsed = false,
 }: Props) {
   const { institution, setInstitution, history, runQuery, clearHistory } = useApp()
@@ -72,11 +48,11 @@ export function LeftSidebar({
     <aside
       style={{ width: `${width}px` }}
       className={
-        'shrink-0 border-r border-rule bg-surface flex flex-col relative ' +
+        'shrink-0 border-r border-rule/70 bg-surface/95 flex flex-col relative ' +
         (animate ? 'transition-[width] duration-200 ease-out' : '')
       }
     >
-      <div className="px-5 py-5 border-b border-rule">
+      <div className="px-5 py-5 border-b border-rule/70">
         <div className="flex items-center gap-3">
           <img
             src="/icon.png"
@@ -95,7 +71,6 @@ export function LeftSidebar({
         </div>
       </div>
 
-
       <nav className="flex-1 overflow-y-auto px-3 py-5 space-y-7">
         <Section label="Institution">
           {INSTITUTIONS.map((inst) => (
@@ -113,7 +88,7 @@ export function LeftSidebar({
 
         <Section
           label="Documents"
-          action={<span className="text-[10px] text-ink-muted/70">Coming soon</span>}
+          action={<span className="text-[10px] text-ink-muted/70 tracking-wider">Coming soon</span>}
         >
           <SidebarRow>Faculty Handbook</SidebarRow>
         </Section>
@@ -125,7 +100,7 @@ export function LeftSidebar({
               <button
                 type="button"
                 onClick={() => clearHistory(institution)}
-                className="text-[10px] text-ink-muted hover:text-ink-soft transition-colors cursor-pointer"
+                className="text-[10px] text-ink-muted hover:text-ink-soft transition-colors duration-150 cursor-pointer tracking-wider"
                 title={`Clear ${institution} history`}
               >
                 Clear
@@ -144,7 +119,7 @@ export function LeftSidebar({
                 type="button"
                 onClick={() => runQuery(entry.query)}
                 title={entry.query}
-                className="block w-full text-left px-2 py-1.5 rounded-md text-sm text-ink-soft hover:bg-canvas hover:text-ink transition-colors truncate cursor-pointer focus:outline-none focus-visible:bg-canvas focus-visible:text-ink"
+                className="block w-full text-left px-2 py-1.5 rounded-md text-sm text-ink-soft hover:bg-canvas hover:text-ink transition-colors duration-150 truncate cursor-pointer focus:outline-none focus-visible:bg-canvas focus-visible:text-ink"
               >
                 {entry.query}
               </button>
@@ -153,7 +128,7 @@ export function LeftSidebar({
         </Section>
       </nav>
 
-      <div className="px-3 py-3 border-t border-rule">
+      <div className="px-3 py-3 border-t border-rule/70">
         <button
           type="button"
           disabled
@@ -165,15 +140,18 @@ export function LeftSidebar({
         </button>
       </div>
 
-      <ResizeHandle edge="right" onDelta={handleResize} onReset={onResetWidth} />
+      <ResizeHandle
+        edge="right"
+        onDelta={handleResize}
+        onReset={onResetWidth}
+        onDragEnd={onDragEnd}
+      />
     </aside>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Collapsed (icon-rail) variant — shown at <900px viewports. Just the brand
-// mark and institution dots; documents / history / compare drop off because
-// they need wider rows to be legible. Tooltips preserve discoverability.
+// Collapsed (icon-rail) variant — shown at <900px viewports.
 // ---------------------------------------------------------------------------
 
 function CollapsedSidebar({
@@ -186,7 +164,7 @@ function CollapsedSidebar({
   return (
     <aside
       style={{ width: `${RAIL_WIDTH}px` }}
-      className="shrink-0 border-r border-rule bg-surface flex flex-col items-center py-4 gap-4"
+      className="shrink-0 border-r border-rule/70 bg-surface/95 flex flex-col items-center py-4 gap-4"
     >
       <img
         src="/icon.png"
@@ -196,7 +174,7 @@ function CollapsedSidebar({
         className="w-9 h-9 rounded-md shrink-0"
         title="PolicyLens"
       />
-      <div className="w-full border-t border-rule" />
+      <div className="w-full border-t border-rule/70" />
       <div className="flex flex-col items-center gap-1 w-full">
         {INSTITUTIONS.map((inst) => {
           const active = institution === inst.key
@@ -248,7 +226,7 @@ function Section({
   return (
     <div>
       <div className="px-2 mb-2 flex items-center justify-between gap-2">
-        <h2 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-muted">
+        <h2 className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-muted">
           {label}
         </h2>
         {action}
@@ -280,7 +258,7 @@ function SidebarRow({
         onClick={onClick}
         style={style}
         className={
-          'flex items-center gap-2 w-full text-left px-2 py-1.5 rounded-md text-sm select-none cursor-pointer transition-colors focus:outline-none focus-visible:bg-canvas focus-visible:text-ink ' +
+          'flex items-center gap-2 w-full text-left px-2 py-1.5 rounded-md text-sm select-none cursor-pointer transition-colors duration-150 focus:outline-none focus-visible:bg-canvas focus-visible:text-ink ' +
           (active
             ? 'text-ink font-semibold'
             : 'text-ink-soft hover:bg-canvas hover:text-ink')

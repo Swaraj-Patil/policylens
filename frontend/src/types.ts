@@ -38,6 +38,29 @@ export type HistoryEntry = {
 }
 
 /**
+ * One submission in the research workspace timeline. Independent from the
+ * stateless backend — the backend never sees the entry list. Persisted to
+ * localStorage so reloading restores the workspace exactly.
+ *
+ * `result === null` with `completedAt === null` means in-flight. With
+ * `completedAt` set, an `errorKind` indicates failure; otherwise `result`
+ * carries the answer. `streamed` flips to true once the reveal animation
+ * has fully played for this entry — guards against re-animation on reload
+ * or on re-activation of an older entry.
+ */
+export type AnswerEntry = {
+  id: string
+  query: string
+  institution: string
+  result: QueryResponse | null
+  errorKind: ErrorKind | null
+  startedAt: number
+  completedAt: number | null
+  elapsedMs: number | null
+  streamed: boolean
+}
+
+/**
  * Discriminated kinds of recoverable failure surfaced to the user. Drives the
  * error/empty-state copy in CenterPanel. `no_results` is *not* a transport
  * failure — it represents a 200 OK with an empty source list (the model

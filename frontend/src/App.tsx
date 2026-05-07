@@ -4,6 +4,7 @@ import { LeftSidebar } from './components/LeftSidebar'
 import { CenterPanel } from './components/CenterPanel'
 import { RightInspector } from './components/RightInspector'
 import { useApp } from './state'
+import { MOTION } from './motion'
 
 const PANEL_WIDTHS_KEY = 'policylens.panels.v1'
 
@@ -15,12 +16,7 @@ const RIGHT_MIN = 280
 const RIGHT_MAX = 520
 const RIGHT_DEFAULT = 360
 
-const TRANSITION_MS = 220
-
-// Breakpoints — matches Step 10 spec.
-//   <  900: left sidebar collapses to a 56px icon rail
-//   < 1100: right panel becomes an overlay drawer
-//   1100+: standard 3-pane resizable layout
+// Breakpoints — same as Step 10.
 const BREAK_LEFT_RAIL = 900
 const BREAK_RIGHT_DRAWER = 1100
 
@@ -46,8 +42,6 @@ function loadPanels(): { left: number; right: number } {
   return { left: LEFT_DEFAULT, right: RIGHT_DEFAULT }
 }
 
-// Tracks viewport width for responsive layout decisions. Throttled-ish via
-// requestAnimationFrame so a fast resize doesn't thrash React state.
 function useViewportWidth(): number {
   const [width, setWidth] = useState<number>(() =>
     typeof window === 'undefined' ? 1440 : window.innerWidth,
@@ -71,9 +65,9 @@ function App() {
   const [leftWidth, setLeftWidth] = useState<number>(() => loadPanels().left)
   const [rightWidth, setRightWidth] = useState<number>(() => loadPanels().right)
 
-  // Width transitions are disabled during drag to keep cursor 1:1 with the
-  // panel edge; they're enabled briefly on programmatic resets so a "snap
-  // back" feels animated rather than abrupt.
+  // Width transitions are disabled during drag (cursor 1:1 with edge); they
+  // re-enable on programmatic reset and *briefly* after drag-release so the
+  // final clamp/snap interpolates instead of jumping. See `triggerSettle`.
   const [animateLeft, setAnimateLeft] = useState(false)
   const [animateRight, setAnimateRight] = useState(false)
 
@@ -83,15 +77,10 @@ function App() {
 
   const [drawerOpen, setDrawerOpen] = useState(false)
 
-  // When the viewport grows back past the drawer breakpoint the standard
-  // layout takes over — close any lingering drawer state to avoid the panel
-  // appearing twice.
   useEffect(() => {
     if (!isOverlayRight) setDrawerOpen(false)
   }, [isOverlayRight])
 
-  // Esc closes the overlay drawer (input-scoped Esc inside CenterPanel
-  // returns early before this fires, so this won't fight the search bar).
   useEffect(() => {
     if (!drawerOpen) return
     function onKey(e: KeyboardEvent) {
@@ -112,28 +101,30 @@ function App() {
     }
   }, [leftWidth, rightWidth])
 
-  function resetLeft() {
+  function triggerSettleLeft() {
     setAnimateLeft(true)
-    setLeftWidth(LEFT_DEFAULT)
-    setTimeout(() => setAnimateLeft(false), TRANSITION_MS + 30)
+    setTimeout(() => setAnimateLeft(false), MOTION.resizeSettleMs + 30)
   }
-
-  function resetRight() {
+  function triggerSettleRight() {
     setAnimateRight(true)
-    setRightWidth(RIGHT_DEFAULT)
-    setTimeout(() => setAnimateRight(false), TRANSITION_MS + 30)
+    setTimeout(() => setAnimateRight(false), MOTION.resizeSettleMs + 30)
   }
 
-  // Onboarding mount: stagger sidebar → center → right panel over ~500ms.
-  // Initial-only animation (no key changes), so it runs once on first render
-  // and never replays. Total budget kept short — premium-feeling onboarding
-  // shouldn't make the UI feel sluggish to land.
+  function resetLeft() {
+    setLeftWidth(LEFT_DEFAULT)
+    triggerSettleLeft()
+  }
+  function resetRight() {
+    setRightWidth(RIGHT_DEFAULT)
+    triggerSettleRight()
+  }
+
   return (
-    <div className="flex h-full bg-canvas text-ink relative overflow-hidden">
+    <div className="flex h-full text-ink relative overflow-hidden">
       <motion.div
         initial={{ opacity: 0, x: -8 }}
         animate={{ opacity: 1, x: 0 }}
-        transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1], delay: 0 }}
+        transition={{ ...MOTION.enter, delay: 0 }}
         className="flex shrink-0"
       >
         <LeftSidebar
@@ -143,6 +134,7 @@ function App() {
           animate={animateLeft}
           setWidth={setLeftWidth}
           onResetWidth={resetLeft}
+          onDragEnd={triggerSettleLeft}
           collapsed={isLeftRail}
         />
       </motion.div>
@@ -150,7 +142,7 @@ function App() {
       <motion.main
         initial={{ opacity: 0, y: 6 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1], delay: 0.15 }}
+        transition={{ ...MOTION.enter, duration: 0.4, delay: 0.15 }}
         className="flex-1 min-w-0 overflow-y-auto"
       >
         <CenterPanel />
@@ -160,7 +152,7 @@ function App() {
         <motion.div
           initial={{ opacity: 0, x: 8 }}
           animate={{ opacity: 1, x: 0 }}
-          transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1], delay: 0.3 }}
+          transition={{ ...MOTION.enter, delay: 0.3 }}
           className="flex shrink-0"
         >
           <RightInspector
@@ -170,6 +162,7 @@ function App() {
             animate={animateRight}
             setWidth={setRightWidth}
             onResetWidth={resetRight}
+            onDragEnd={triggerSettleRight}
           />
         </motion.div>
       ) : (
@@ -183,7 +176,7 @@ function App() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: 0.15 }}
+                  transition={{ duration: 0.18, ease: MOTION.ease }}
                   onClick={() => setDrawerOpen(false)}
                   className="fixed inset-0 z-40 bg-ink/20 backdrop-blur-[1px]"
                 />
@@ -192,7 +185,7 @@ function App() {
                   initial={{ x: '100%' }}
                   animate={{ x: 0 }}
                   exit={{ x: '100%' }}
-                  transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                  transition={MOTION.layout}
                   className="fixed top-0 right-0 bottom-0 z-50 shadow-card-hover"
                 >
                   <RightInspector
@@ -215,8 +208,6 @@ function App() {
   )
 }
 
-// Floating affordance to open the source drawer at narrow widths. Doubles as
-// a source-count indicator so users know there's something to look at.
 function DrawerTrigger({ onOpen, hidden }: { onOpen: () => void; hidden: boolean }) {
   const { currentResult } = useApp()
   const count = currentResult?.sources?.length ?? 0
@@ -232,7 +223,7 @@ function DrawerTrigger({ onOpen, hidden }: { onOpen: () => void; hidden: boolean
         'fixed top-4 right-4 z-30 inline-flex items-center gap-2 ' +
         'px-3 py-1.5 rounded-full bg-surface border border-rule shadow-card ' +
         'text-[12px] text-ink-soft hover:text-ink hover:border-rule-strong ' +
-        'transition-colors cursor-pointer'
+        'transition-colors duration-150 cursor-pointer'
       }
     >
       <svg

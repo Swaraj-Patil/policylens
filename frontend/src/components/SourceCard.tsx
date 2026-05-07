@@ -2,29 +2,33 @@ import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useApp } from '../state'
 import { matchKeyOf } from '../citations'
+import { institutionByKey } from '../institutions'
 import type { GroupedSource } from '../types'
+import { MOTION } from '../motion'
 
 const HIGH_DIFFICULTY_THRESHOLD = 14
-const EASE_OUT_QUART: [number, number, number, number] = [0.16, 1, 0.3, 1]
 const PULSE_MS = 1200
 
 export function SourceCard({
   source,
-  index,
+  rank,
   expanded,
   onToggle,
   pulseKey,
 }: {
   source: GroupedSource
-  index: number
+  /** 1-based ranking from the retriever — surfaced as a small marker so the
+   *  reader knows which result is most relevant without ordering having to
+   *  be inferred from layout. */
+  rank: number
   expanded: boolean
   onToggle: () => void
-  /** Increments each time focusSource() targets this card. Drives the
-   *  attention pulse without re-firing on first mount. */
+  /** Increments each time focusSource() targets this card. */
   pulseKey?: number
 }) {
   const { hoveredMatchKey, setHoveredMatchKey } = useApp()
   const key = matchKeyOf(source)
+  const inst = institutionByKey(source.institution)
   const active = hoveredMatchKey === key
 
   const pageRef =
@@ -34,10 +38,8 @@ export function SourceCard({
 
   const fk = source.flesch_kincaid_grade
   const isHighDifficulty = fk !== null && fk > HIGH_DIFFICULTY_THRESHOLD
+  const rankLabel = String(rank).padStart(2, '0')
 
-  // Pulse only on subsequent focusSource() calls — not the initial render.
-  // Tracking the last applied nonce in a ref guards against StrictMode's
-  // double-invoke and against unrelated re-renders that don't change pulseKey.
   const [isPulsing, setIsPulsing] = useState(false)
   const lastPulseRef = useRef<number | undefined>(undefined)
   useEffect(() => {
@@ -56,24 +58,33 @@ export function SourceCard({
     setHoveredMatchKey(null)
   }
 
+  // Subtle institution-tinted left edge when the card is the active or
+  // hovered document. At rest it's transparent so the inspector reads as a
+  // clean list rather than a colored stack.
+  const leftEdgeStyle =
+    (active || expanded) && inst
+      ? { boxShadow: `inset 3px 0 0 ${inst.tintAccent}` }
+      : undefined
+
   return (
     <motion.div
       data-source-key={key}
-      initial={{ opacity: 0, y: 8 }}
+      initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: active && !expanded ? -1 : 0 }}
       whileHover={!expanded ? { y: -1 } : undefined}
       transition={{
-        opacity: { duration: 0.28, ease: EASE_OUT_QUART, delay: index * 0.04 },
-        y: { duration: 0.15, ease: EASE_OUT_QUART },
+        opacity: { ...MOTION.enter, delay: rank * MOTION.stagger },
+        y: MOTION.quick,
       }}
       onMouseEnter={enter}
       onMouseLeave={leave}
+      style={leftEdgeStyle}
       className={[
-        'block w-full text-left border-l-2',
+        'block w-full text-left',
         'transition-colors duration-150',
         active || expanded
-          ? 'bg-highlight border-accent'
-          : 'border-transparent hover:bg-canvas',
+          ? 'bg-highlight/70'
+          : 'hover:bg-canvas/60',
         isPulsing ? 'source-pulse' : '',
       ].join(' ')}
     >
@@ -85,10 +96,25 @@ export function SourceCard({
         aria-expanded={expanded}
         className="block w-full text-left px-5 py-4 cursor-pointer focus:outline-none focus-visible:bg-highlight/40"
       >
-        <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <span
+            aria-hidden
+            className="font-mono text-[10px] text-ink-muted/70 leading-snug pt-[3px] select-none w-5 shrink-0"
+          >
+            {rankLabel}
+          </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline gap-2 text-[10px] uppercase tracking-[0.1em] text-ink-muted mb-2">
-              <span>{source.institution}</span>
+              {inst && (
+                <span className="inline-flex items-center gap-1">
+                  <span
+                    aria-hidden
+                    className="inline-block w-1 h-1 rounded-full"
+                    style={{ backgroundColor: inst.tintDot }}
+                  />
+                  <span>{source.institution}</span>
+                </span>
+              )}
               <span aria-hidden className="text-ink-muted/50">·</span>
               <span className="font-mono normal-case tracking-normal">{pageRef}</span>
               {source.count > 1 && (
@@ -103,7 +129,7 @@ export function SourceCard({
                 </>
               )}
             </div>
-            <h4 className="text-[14px] font-semibold text-ink leading-snug">
+            <h4 className="text-[14px] font-semibold text-ink leading-snug font-serif-display">
               {source.section_title}
             </h4>
           </div>
@@ -125,20 +151,20 @@ export function SourceCard({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: EASE_OUT_QUART }}
-            className="overflow-hidden"
+            transition={MOTION.layout}
+            className="overflow-hidden source-unfold"
           >
-            <div className="px-5 pb-4 pt-1 space-y-3">
+            <div className="pl-[44px] pr-5 pb-5 pt-1 space-y-3">
               {source.excerpts.length > 0 ? (
                 source.excerpts.map((excerpt, i) => (
                   <p
                     key={i}
-                    className="text-[13px] text-ink-soft leading-[1.65] line-clamp-5"
+                    className="text-[13px] text-ink-soft leading-[1.7] line-clamp-6"
                     style={{
                       maskImage:
-                        'linear-gradient(to bottom, black 70%, transparent 100%)',
+                        'linear-gradient(to bottom, black 75%, transparent 100%)',
                       WebkitMaskImage:
-                        'linear-gradient(to bottom, black 70%, transparent 100%)',
+                        'linear-gradient(to bottom, black 75%, transparent 100%)',
                     }}
                   >
                     {excerpt}
@@ -158,9 +184,6 @@ export function SourceCard({
   )
 }
 
-// Affordance seed for a future PDF/document viewer. Disabled today; the
-// styling and copy match how it'd render once wired up, so the layout doesn't
-// shift when capability lands.
 function OpenSourceButton() {
   return (
     <button
