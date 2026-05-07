@@ -1,0 +1,33 @@
+# Backend-local ignores. Most patterns live in the root .gitignore — only
+# rules that are most natural to scope to backend/ live here.
+
+# Python virtualenvs (any prefix variant — .venv, .venvclear, etc.)
+.venv/
+.venv*/
+venv/
+env/
+
+# Bytecode / type-check caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local env (template lives in .env.example)
+.env
+.env.local
+
+# Per-process LLM cache (LLM_CACHE_ENABLED writes here)
+.llm_cache/
+
+# Vector DB persistence and source PDFs — never commit either.
+data/chroma_db/
+data/pdfs/*.pdf
+
+# HuggingFace / sentence-transformers model cache, when HF_HOME points here.
+.cache/
+.huggingface/
+
+# OS
+.DS_Store

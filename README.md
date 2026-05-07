@@ -14,15 +14,115 @@ University governance documents are typically 100–400 pages of dense bureaucra
 
 Active development. Initial commit May 2026.
 
+## Screenshots
+
+> _Screenshots / demo recording placeholder. Replace this section with rendered images once the demo is captured._
+
+| | |
+|---|---|
+| ![Idle hero — composer + rotating example](docs/screenshots/idle-hero.png) | ![Active answer with citation chips](docs/screenshots/answer-with-citations.png) |
+| ![Source inspector — ranked passages](docs/screenshots/source-inspector.png) | ![Stacked answer timeline](docs/screenshots/answer-timeline.png) |
+
+A 90-second demo video lives at `docs/demo.mp4` (not committed; recorded per release).
+
+---
+
+## Architecture overview
+
+PolicyLens is a 2-tier app: a stateless FastAPI backend in front of a local vector store, and a Vite + React frontend that talks to it over HTTPS. The backend has no database other than ChromaDB; there is no user auth and no cross-request state.
+
+```
+                                 ┌──────────────────────────────────┐
+                                 │  Frontend (Vite + React + TS)     │
+                                 │  ─ Search composer / answer stack │
+                                 │  ─ Per-institution session in     │
+                                 │    localStorage (no backend)      │
+                                 └────────────────┬─────────────────┘
+                                                  │  POST /query
+                                                  │  (HTTPS, CORS-scoped)
+                                                  ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Backend (FastAPI, Python 3.12)                                          │
+│                                                                          │
+│   /query  ──►  Retriever  ──►  ChromaDB (sentence-transformers / MiniLM) │
+│                                       │                                  │
+│                                       ▼                                  │
+│                              top-k retrieved chunks                      │
+│                              + Flesch–Kincaid grade per chunk            │
+│                                       │                                  │
+│                                       ▼                                  │
+│                          Prompt builder (citation rules)                 │
+│                                       │                                  │
+│                                       ▼                                  │
+│                       LLM provider (factory + abstraction)               │
+│                       ─ ollama  → http://localhost:11434  (dev)          │
+│                       ─ groq    → api.groq.com           (prod)          │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+Key invariants:
+
+- **No hallucinated citations.** Every claim in an answer is followed by `[Institution, Section, p.N]`. Citation grammar is enforced in the system prompt and the frontend's citation parser refuses brackets that don't match a retrieved source.
+- **Stateless backend.** Every `/query` is independent. Conversation history, active answer, and the per-institution timeline live entirely in the browser's `localStorage`.
+- **Provider-pluggable LLM.** The provider layer (`backend/app/llm/`) exposes a single `LLMProvider` interface. `LLM_PROVIDER` env var picks `ollama` (local) or `groq` (production). Adding a third provider is a new file + a one-line factory entry.
+- **Reading-difficulty awareness.** Each retrieved chunk gets a Flesch–Kincaid grade. Chunks above grade 14 are flagged in the LLM context and badged in the UI so the reader knows to read carefully.
+
+### Directory map
+
+```
+policylens/
+├── backend/
+│   ├── app/
+│   │   ├── main.py                  # FastAPI routes + CORS + lifespan probe
+│   │   ├── config.py                # pydantic-settings, reads .env
+│   │   ├── ingestion.py             # PDF → sections → chunks → Chroma
+│   │   ├── retrieval.py             # Chroma query → top-k chunks
+│   │   ├── prompts.py               # citation-enforcing system prompts
+│   │   ├── readability.py           # Flesch–Kincaid scoring
+│   │   └── llm/                     # provider abstraction
+│   │       ├── base.py              # LLMProvider ABC
+│   │       ├── ollama_provider.py   # local dev
+│   │       ├── groq_provider.py     # production
+│   │       ├── factory.py           # singleton + env-driven selection
+│   │       └── engine.py            # retry / cache / fallback
+│   ├── tests/                       # pytest suite (30 tests)
+│   ├── Dockerfile                   # production image
+│   ├── render.yaml                  # Render blueprint
+│   ├── railway.json                 # Railway config
+│   └── README_DEPLOY.md
+├── frontend/
+│   ├── src/
+│   │   ├── App.tsx                  # 3-pane layout + responsive drawer
+│   │   ├── state.tsx                # React Context: timeline, sessions
+│   │   ├── api.ts                   # single fetch source-of-truth
+│   │   ├── citations.ts             # citation tokenizer + source grouper
+│   │   ├── institutions.ts          # tint/identity table
+│   │   └── components/              # CenterPanel, RightInspector, …
+│   ├── vite.config.ts               # dev proxy → localhost:8000
+│   └── README_DEPLOY.md
+├── docs/
+│   └── design-choices.md            # running log of tradeoff decisions
+└── README.md
+```
+
+---
+
 ## Stack
 
-- **Backend:** Python 3.12, FastAPI, ChromaDB
-- **PDF parsing:** PyMuPDF (preserves section + page metadata)
-- **Embeddings:** `sentence-transformers/all-MiniLM-L6-v2` (local, runs on Apple Silicon)
-- **LLM:** Local inference via [Ollama](https://ollama.com) (default: `qwen2.5:7b-instruct`). Optional Gemini fallback via `google-genai`.
-- **Frontend:** Vite + React + TypeScript + Tailwind + shadcn/ui
+| Layer | Choice |
+|---|---|
+| Backend | Python 3.12, FastAPI, Uvicorn |
+| PDF parsing | PyMuPDF (preserves section + page metadata) |
+| Embeddings | `sentence-transformers/all-MiniLM-L6-v2` (local, runs on Apple Silicon CPU) |
+| Vector DB | ChromaDB, persistent local directory |
+| LLM (dev) | [Ollama](https://ollama.com), default `qwen2.5:7b-instruct` |
+| LLM (prod) | [Groq](https://console.groq.com), default `llama3-70b-8192` |
+| Frontend | Vite + React + TypeScript + Tailwind v4 + Framer Motion |
+| Deployment | Backend → Render or Railway (Docker). Frontend → Vercel. |
 
-## Setup
+---
+
+## Local setup
 
 ### 1. Python backend
 
@@ -40,9 +140,11 @@ uv pip install -r requirements.txt
 cp .env.example .env
 ```
 
+If you prefer the standard tooling, `python3.12 -m venv .venv && pip install -r requirements.txt` works too.
+
 ### 2. Ollama (local LLM, no API key required)
 
-PolicyLens runs its language model locally - answers stay on your machine and there's no API quota or external service dependency.
+PolicyLens runs its language model locally during development - answers stay on your machine and there's no API quota or external service dependency.
 
 ```bash
 # Install
@@ -59,29 +161,36 @@ ollama pull qwen2.5:7b-instruct
 
 #### Alternative models
 
-Set `LOCAL_LLM_MODEL` in `.env` to switch:
+Set `OLLAMA_MODEL` in `.env` to switch (legacy `LOCAL_LLM_MODEL` is also accepted):
 
-| Model                    | Notes                                                   |
-| ------------------------ | ------------------------------------------------------- |
-| `qwen2.5:7b-instruct`    | **Default.** Best instruction-following at 7B scale.    |
-| `mistral:7b-instruct`    | Slightly faster, similar quality on extraction tasks.   |
-| `llama3.1:8b-instruct`   | Meta's open model - strong general-purpose alternative. |
+| Model | Notes |
+|---|---|
+| `qwen2.5:7b-instruct` | **Default.** Best instruction-following at 7B scale. |
+| `mistral:7b-instruct` | Slightly faster, similar quality on extraction tasks. |
+| `llama3.1:8b-instruct` | Meta's open model — strong general-purpose alternative. |
 
 #### Hardware expectations on Apple Silicon
 
-| Model       | RAM (Q4 quant) | Tokens/sec (M1/M2/M4) | First request |
-| ----------- | -------------- | --------------------- | ------------- |
-| qwen2.5:7b  | ~4.5 GB        | 25–40                 | 3–8s cold     |
-| mistral:7b  | ~4.4 GB        | 25–40                 | 3–8s cold     |
-| llama3.1:8b | ~5.0 GB        | 20–35                 | 4–10s cold    |
+| Model | RAM (Q4 quant) | Tokens/sec (M1/M2/M4) | First request |
+|---|---|---|---|
+| qwen2.5:7b | ~4.5 GB | 25–40 | 3–8s cold |
+| mistral:7b | ~4.4 GB | 25–40 | 3–8s cold |
+| llama3.1:8b | ~5.0 GB | 20–35 | 4–10s cold |
 
 A typical RAG response (8 retrieved chunks, ~1500 tokens of context) takes 5–15 seconds end-to-end. The first request after `ollama serve` is slower because the model has to be loaded into memory; subsequent requests hit a warm model.
 
-### 3. Optional: Gemini cloud fallback
+### 3. Optional: Groq (cloud) for local benchmarking
 
-If you'd rather use a hosted model (e.g., for benchmarking quality), set `USE_LOCAL_LLM=false` in `.env` and provide `GEMINI_API_KEY`. Get a free key (no credit card) at <https://aistudio.google.com/apikey>. Free tier: 10 RPM, 250 RPD on `gemini-2.5-flash`.
+If you'd rather use the production model locally (e.g. to benchmark answer quality without spinning up Ollama), set in `.env`:
 
-## Adding documents
+```
+LLM_PROVIDER=groq
+GROQ_API_KEY=gsk_…   # from https://console.groq.com/keys
+```
+
+Free key (no credit card). Free-tier quota is generous (~30 RPM on `llama3-70b-8192` at the time of writing).
+
+### 4. Adding documents
 
 ```bash
 # Drop a PDF into backend/data/pdfs/, then ingest:
@@ -90,7 +199,9 @@ python -m app.ingestion ingest \
   --pdf data/pdfs/northeastern_faculty_handbook_2026.pdf
 ```
 
-## Running
+The vector DB and PDFs are gitignored — you must run ingestion locally before either local dev or production deploy.
+
+### 5. Run
 
 ```bash
 # Terminal 1: Ollama (skip if running as a service)
@@ -99,11 +210,49 @@ ollama serve
 # Terminal 2: Backend
 cd backend && uvicorn app.main:app --reload
 
-# Terminal 3: Frontend (after Day 3 scaffolding)
-cd frontend && npm run dev
+# Terminal 3: Frontend
+cd frontend && npm install && npm run dev
 ```
 
-On startup, the backend probes Ollama and logs which provider/model is in use. If Ollama is unreachable or the configured model isn't pulled, you'll see a warning at startup but the server still comes up - `/query` will return a fallback message until the LLM is available again.
+Open http://localhost:5173. The Vite dev server proxies `/api/*` to the backend, so no frontend env config is needed for local dev.
+
+On startup, the backend probes the configured LLM provider and logs which one is in use. If Ollama is unreachable or the configured model isn't pulled, the server still comes up — `/query` returns a fallback message until the LLM is available again.
+
+---
+
+## Deployment overview
+
+PolicyLens has two deploy targets, both free for development traffic:
+
+```
+Frontend (static)               Backend (Docker)
+┌──────────────┐                ┌──────────────────────┐
+│   Vercel     │  ──── HTTPS ──►│  Render or Railway   │
+│   Vite build │  CORS-scoped   │  FastAPI + Chroma    │
+└──────────────┘                └──────────┬───────────┘
+                                            │
+                                    HTTPS   │
+                                            ▼
+                                ┌──────────────────────┐
+                                │  Groq API            │
+                                │  api.groq.com        │
+                                └──────────────────────┘
+```
+
+Detailed instructions:
+
+- **Backend** → [`backend/README_DEPLOY.md`](backend/README_DEPLOY.md). Render or Railway, both via the included `Dockerfile`. Required env: `LLM_PROVIDER=groq`, `GROQ_API_KEY`, `FRONTEND_ORIGIN`.
+- **Frontend** → [`frontend/README_DEPLOY.md`](frontend/README_DEPLOY.md). Vercel, root directory `frontend`. Required env: `VITE_API_BASE_URL` (the deployed backend URL).
+
+### Deploy order
+
+1. Ingest your handbooks locally (`python -m app.ingestion ingest …`). The `data/chroma_db/` directory is baked into the backend Docker image at build time.
+2. Deploy the **backend** first. Note its URL.
+3. Deploy the **frontend** with `VITE_API_BASE_URL` pointing at that URL.
+4. Add the frontend's URL to the backend's `FRONTEND_ORIGIN` env var and redeploy the backend (so CORS allows the frontend).
+5. Verify with the checklist in `frontend/README_DEPLOY.md`.
+
+---
 
 ## Sourcing documents
 
@@ -111,8 +260,8 @@ PolicyLens uses publicly-available governance documents. Faculty handbooks are t
 
 ## Design decisions and tradeoffs
 
-See [`docs/design-choices.md`](docs/design-choices.md) for a running log of decisions made during development - chunking strategy, embedding choice, retrieval-k tuning, prompt iteration, the LLM-provider pivot, etc. This doc exists because evaluating computational tooling is a deliberate part of the project's purpose, not just engineering hygiene.
+See [`docs/design-choices.md`](docs/design-choices.md) for a running log of decisions made during development - chunking strategy, embedding choice, retrieval-k tuning, prompt iteration, the LLM-provider pivots (Anthropic → Gemini → Ollama+Groq), etc. This doc exists because evaluating computational tooling is a deliberate part of the project's purpose, not just engineering hygiene.
 
 ## License
 
-To be determined. Currently a research/demonstration project - not yet licensed for redistribution.
+To be determined. Currently a research/demonstration project — not yet licensed for redistribution.

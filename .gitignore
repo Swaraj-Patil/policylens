@@ -1,38 +1,101 @@
-# Python
+# =============================================================
+# PolicyLens — repo-wide ignores
+# =============================================================
+# Per-language patterns are kept in this single root file so the rules
+# don't drift between frontend/ and backend/. Subtree-specific exceptions
+# can live in nested .gitignore files.
+
+# ---- OS ----------------------------------------------------
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ---- IDE / editor ------------------------------------------
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*.sw?
+
+# ---- Claude Code workspace state ---------------------------
+# `settings.local.json` is per-user permission state — never commit it.
+.claude/settings.local.json
+.claude/local/
+
+# =============================================================
+# Python / backend
+# =============================================================
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-.env
-venv/
+
+# Virtual environments — match any prefix (.venv, .venvclear, venv-old, etc.)
 .venv/
+.venv*/
+venv/
 env/
+
+# pytest / lint / type-check caches
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
-*.egg-info/
+
+# Build artifacts
 build/
 dist/
+*.egg-info/
 
+# Local env (template lives in .env.example)
+.env
+.env.local
+.env.*.local
+
+# LLM disk cache (LLM_CACHE_ENABLED=true writes here in dev)
+.llm_cache/
+
+# Embedding / model caches — sentence-transformers and HF default to
+# ~/.cache/huggingface but a custom HF_HOME can land them in-repo.
+.cache/
+.cache/huggingface/
+.cache/torch/
+.huggingface/
+
+# Vector DB persistence — never commit ChromaDB state or its sqlite file.
+backend/data/chroma_db/
+*.db
+*.sqlite
+*.sqlite3
+*.duckdb
+
+# Source PDFs are sensitive (only public docs should be ingested) and
+# large — never commit them.
+backend/data/pdfs/*.pdf
+
+# =============================================================
 # Node / frontend
+# =============================================================
 node_modules/
 .next/
 .vite/
+dist/
+dist-ssr/
+build/
 frontend/dist/
+*.tsbuildinfo
 
-# Project data — never commit handbooks or vector store
-backend/data/pdfs/*.pdf
-backend/data/chroma_db/
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-
-# Caches
-.cache/
-.llm_cache/
+# Local env (Vite — template lives in frontend/.env.example)
+.env.local
+*.local
