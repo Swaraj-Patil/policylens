@@ -1,0 +1,26 @@
+# Build context hygiene — keep the image small and free of dev cruft.
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local dev artifacts that shouldn't ship.
+.env
+.env.local
+.llm_cache/
+
+# Tests aren't needed at runtime.
+tests/
+
+# PDFs are large and the chroma_db built from them already encodes the
+# searchable text. Drop the raw PDFs from the image — re-ingest if you
+# need to rebuild the index.
+data/pdfs/
+
+# Editor state.
+.vscode/
+.idea/
+.DS_Store

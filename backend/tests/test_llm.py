@@ -23,6 +23,18 @@ DECLINE_PHRASES = [
 ]
 
 
+# The factory caches a single LLMProvider instance per process. Without this
+# reset, a test that swaps the provider (e.g. test_cache_key_differs_across_providers)
+# would leak its choice into subsequent tests — including live tests that
+# would then talk to the wrong backend with the wrong key.
+@pytest.fixture(autouse=True)
+def _reset_llm_provider_singleton():
+    from app.llm import factory
+    factory.reset_provider_for_testing()
+    yield
+    factory.reset_provider_for_testing()
+
+
 def _response_declines(text: str) -> bool:
     lower = text.lower()
     return any(phrase in lower for phrase in DECLINE_PHRASES)
@@ -30,13 +42,16 @@ def _response_declines(text: str) -> bool:
 
 def _llm_available() -> bool:
     """True if the configured provider is reachable for live tests."""
-    if settings.use_local_llm:
+    provider = (settings.llm_provider or "ollama").lower()
+    if provider == "ollama":
         try:
             httpx.get(f"{settings.ollama_base_url}/api/tags", timeout=2.0)
             return True
         except Exception:
             return False
-    return bool(settings.gemini_api_key)
+    if provider == "groq":
+        return bool(settings.groq_api_key)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -92,8 +107,8 @@ class _FakeBadRequest(Exception):
 
 
 def test_call_with_retry_succeeds_after_transient_failures(monkeypatch):
-    from app import llm
-    monkeypatch.setattr(llm.time, "sleep", lambda *_: None)
+    from app.llm import engine
+    monkeypatch.setattr(engine.time, "sleep", lambda *_: None)
 
     calls = {"n": 0}
 
@@ -103,14 +118,14 @@ def test_call_with_retry_succeeds_after_transient_failures(monkeypatch):
             raise _FakeServiceUnavailable()
         return "ok"
 
-    result = llm.call_with_retry(flaky, base_delay=0.0)
+    result = engine.call_with_retry(flaky, base_delay=0.0)
     assert result == "ok"
     assert calls["n"] == 3
 
 
 def test_call_with_retry_raises_after_exhausting_retries(monkeypatch):
-    from app import llm
-    monkeypatch.setattr(llm.time, "sleep", lambda *_: None)
+    from app.llm import engine
+    monkeypatch.setattr(engine.time, "sleep", lambda *_: None)
 
     calls = {"n": 0}
 
@@ -119,13 +134,13 @@ def test_call_with_retry_raises_after_exhausting_retries(monkeypatch):
         raise _FakeServiceUnavailable()
 
     with pytest.raises(_FakeServiceUnavailable):
-        llm.call_with_retry(always_fail, base_delay=0.0)
+        engine.call_with_retry(always_fail, base_delay=0.0)
     assert calls["n"] == 4
 
 
 def test_call_with_retry_skips_non_retryable_errors(monkeypatch):
-    from app import llm
-    monkeypatch.setattr(llm.time, "sleep", lambda *_: None)
+    from app.llm import engine
+    monkeypatch.setattr(engine.time, "sleep", lambda *_: None)
 
     calls = {"n": 0}
 
@@ -134,61 +149,81 @@ def test_call_with_retry_skips_non_retryable_errors(monkeypatch):
         raise _FakeBadRequest()
 
     with pytest.raises(_FakeBadRequest):
-        llm.call_with_retry(fail_immediately, base_delay=0.0)
+        engine.call_with_retry(fail_immediately, base_delay=0.0)
     assert calls["n"] == 1
 
 
 def test_call_with_retry_records_exponential_backoff(monkeypatch):
-    from app import llm
+    from app.llm import engine
     sleeps: list[float] = []
-    monkeypatch.setattr(llm.time, "sleep", lambda d: sleeps.append(d))
+    monkeypatch.setattr(engine.time, "sleep", lambda d: sleeps.append(d))
 
     def always_fail():
         raise _FakeServiceUnavailable()
 
     with pytest.raises(_FakeServiceUnavailable):
-        llm.call_with_retry(always_fail, base_delay=1.0)
+        engine.call_with_retry(always_fail, base_delay=1.0)
     assert sleeps == [1.0, 2.0, 4.0]
+
+
+# Helper: install a stub provider in the factory singleton for the duration
+# of one test. Replaces the legacy `_invoke_ollama` monkeypatch idiom.
+def _install_stub_provider(monkeypatch, *, generate):
+    from app.llm import factory
+    from app.llm.base import LLMProvider
+
+    class _StubProvider(LLMProvider):
+        name = "stub"
+
+        def generate(self, *, system: str, user: str) -> str:
+            return generate(system, user)
+
+        def health_check(self):
+            return {"provider": "stub", "status": "ok"}
+
+        def info(self):
+            return {"provider": "stub", "model": "stub"}
+
+    factory.reset_provider_for_testing()
+    monkeypatch.setattr(factory, "_build_provider", lambda: _StubProvider())
+    return factory.get_llm_provider()
 
 
 def test_call_llm_returns_fallback_after_persistent_failure(monkeypatch):
     """When all retries are exhausted, /query gets the fallback message."""
-    from app import llm
-    monkeypatch.setattr(llm.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(llm.settings, "llm_cache_enabled", False)
-    monkeypatch.setattr(llm.settings, "use_local_llm", True)
+    from app.llm import engine
+    monkeypatch.setattr(engine.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(engine.settings, "llm_cache_enabled", False)
 
     def always_fail(_system, _user):
         raise _FakeServiceUnavailable()
 
-    monkeypatch.setattr(llm, "_invoke_ollama", always_fail)
+    _install_stub_provider(monkeypatch, generate=always_fail)
 
-    result = llm._call_llm("system", "user")
-    assert result == llm.FALLBACK_MESSAGE
+    result = engine.call_llm("system", "user")
+    assert result == engine.FALLBACK_MESSAGE
 
 
 def test_call_llm_does_not_cache_fallback(monkeypatch, tmp_path):
-    from app import llm
-    monkeypatch.setattr(llm.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(llm.settings, "llm_cache_enabled", True)
-    monkeypatch.setattr(llm.settings, "llm_cache_dir", tmp_path)
-    monkeypatch.setattr(llm.settings, "use_local_llm", True)
+    from app.llm import engine
+    monkeypatch.setattr(engine.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(engine.settings, "llm_cache_enabled", True)
+    monkeypatch.setattr(engine.settings, "llm_cache_dir", tmp_path)
 
     def always_fail(_system, _user):
         raise _FakeServiceUnavailable()
 
-    monkeypatch.setattr(llm, "_invoke_ollama", always_fail)
+    _install_stub_provider(monkeypatch, generate=always_fail)
 
-    result = llm._call_llm("uniq_system", "uniq_user")
-    assert result == llm.FALLBACK_MESSAGE
+    result = engine.call_llm("uniq_system", "uniq_user")
+    assert result == engine.FALLBACK_MESSAGE
     assert not list(tmp_path.glob("*.json")), "Fallback should not be persisted to cache"
 
 
 def test_call_llm_caches_successful_response(monkeypatch, tmp_path):
-    from app import llm
-    monkeypatch.setattr(llm.settings, "llm_cache_enabled", True)
-    monkeypatch.setattr(llm.settings, "llm_cache_dir", tmp_path)
-    monkeypatch.setattr(llm.settings, "use_local_llm", True)
+    from app.llm import engine
+    monkeypatch.setattr(engine.settings, "llm_cache_enabled", True)
+    monkeypatch.setattr(engine.settings, "llm_cache_dir", tmp_path)
 
     calls = {"n": 0}
 
@@ -196,26 +231,35 @@ def test_call_llm_caches_successful_response(monkeypatch, tmp_path):
         calls["n"] += 1
         return "real answer"
 
-    monkeypatch.setattr(llm, "_invoke_ollama", succeed_once)
+    _install_stub_provider(monkeypatch, generate=succeed_once)
 
-    first = llm._call_llm("sys_cache_test", "user_cache_test")
-    second = llm._call_llm("sys_cache_test", "user_cache_test")
+    first = engine.call_llm("sys_cache_test", "user_cache_test")
+    second = engine.call_llm("sys_cache_test", "user_cache_test")
     assert first == second == "real answer"
     assert calls["n"] == 1, "Second call should hit cache, not invoke the LLM"
 
 
 def test_cache_key_differs_across_providers(monkeypatch):
     """Switching provider/model should invalidate the cache so we don't serve stale answers."""
-    from app import llm
-    monkeypatch.setattr(llm.settings, "use_local_llm", True)
-    monkeypatch.setattr(llm.settings, "local_llm_model", "qwen2.5:7b-instruct")
-    key_ollama = llm._cache_key("sys", "user")
+    from app.llm import engine, factory
+    from app.llm.ollama_provider import OllamaProvider
+    from app.llm.groq_provider import GroqProvider
 
-    monkeypatch.setattr(llm.settings, "use_local_llm", False)
-    monkeypatch.setattr(llm.settings, "gemini_model", "gemini-2.5-flash")
-    key_gemini = llm._cache_key("sys", "user")
+    factory.reset_provider_for_testing()
+    monkeypatch.setattr(
+        factory, "_build_provider",
+        lambda: OllamaProvider(base_url="http://x", model="qwen2.5:7b-instruct"),
+    )
+    key_ollama = engine._cache_key("sys", "user")
 
-    assert key_ollama != key_gemini
+    factory.reset_provider_for_testing()
+    monkeypatch.setattr(
+        factory, "_build_provider",
+        lambda: GroqProvider(api_key="dummy", model="llama3-70b-8192"),
+    )
+    key_groq = engine._cache_key("sys", "user")
+
+    assert key_ollama != key_groq
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +285,8 @@ class _FakeOllamaResponse:
 
 def test_invoke_ollama_constructs_correct_request(monkeypatch):
     """Verify the Ollama request body matches the API spec."""
-    from app import llm
+    from app.llm import ollama_provider
+    from app.llm.ollama_provider import OllamaProvider
 
     captured: dict = {}
 
@@ -251,13 +296,15 @@ def test_invoke_ollama_constructs_correct_request(monkeypatch):
         captured["timeout"] = timeout
         return _FakeOllamaResponse({"response": "ok", "done": True})
 
-    monkeypatch.setattr(llm.httpx, "post", fake_post)
-    monkeypatch.setattr(llm.settings, "local_llm_model", "qwen2.5:7b-instruct")
-    monkeypatch.setattr(llm.settings, "ollama_base_url", "http://localhost:11434")
-    monkeypatch.setattr(llm.settings, "ollama_num_ctx", 8192)
-    monkeypatch.setattr(llm.settings, "ollama_timeout_seconds", 120.0)
+    monkeypatch.setattr(ollama_provider.httpx, "post", fake_post)
 
-    result = llm._invoke_ollama("system here", "user here")
+    provider = OllamaProvider(
+        base_url="http://localhost:11434",
+        model="qwen2.5:7b-instruct",
+        num_ctx=8192,
+        timeout_seconds=120.0,
+    )
+    result = provider.generate(system="system here", user="user here")
 
     assert result == "ok"
     assert captured["url"] == "http://localhost:11434/api/generate"
@@ -272,27 +319,29 @@ def test_invoke_ollama_constructs_correct_request(monkeypatch):
 
 def test_invoke_ollama_raises_on_http_error(monkeypatch):
     """503 from Ollama must surface as HTTPStatusError so retry layer can act on it."""
-    from app import llm
+    from app.llm import ollama_provider
+    from app.llm.ollama_provider import OllamaProvider
 
     monkeypatch.setattr(
-        llm.httpx, "post",
+        ollama_provider.httpx, "post",
         lambda *_a, **_kw: _FakeOllamaResponse({"error": "loading"}, status_code=503),
     )
 
     with pytest.raises(httpx.HTTPStatusError):
-        llm._invoke_ollama("sys", "user")
+        OllamaProvider().generate(system="sys", user="user")
 
 
 def test_invoke_ollama_returns_empty_on_missing_response_field(monkeypatch):
     """If Ollama omits the 'response' field, return empty string rather than crashing."""
-    from app import llm
+    from app.llm import ollama_provider
+    from app.llm.ollama_provider import OllamaProvider
 
     monkeypatch.setattr(
-        llm.httpx, "post",
+        ollama_provider.httpx, "post",
         lambda *_a, **_kw: _FakeOllamaResponse({"done": True}),
     )
 
-    assert llm._invoke_ollama("sys", "user") == ""
+    assert OllamaProvider().generate(system="sys", user="user") == ""
 
 
 # ---------------------------------------------------------------------------

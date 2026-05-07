@@ -6,10 +6,16 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.llm import answer_single, check_llm_available
+from app.llm import (
+    HealthCheckError,
+    answer_single,
+    check_llm_available,
+    get_llm_provider,
+)
 from app.retrieval import retrieve
 
 logging.basicConfig(
@@ -19,13 +25,59 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Lifespan + CORS
+# ---------------------------------------------------------------------------
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Touch the factory once so the "[PolicyLens] LLM provider: …" startup
+    # log fires before any request arrives.
+    get_llm_provider()
     check_llm_available()
     yield
 
 
 app = FastAPI(title="PolicyLens", version="0.1.0", lifespan=lifespan)
+
+
+def _cors_origins() -> list[str]:
+    """Build the allowed-origins list.
+
+    Production: only `FRONTEND_ORIGIN` (the deployed frontend URL).
+    Development: localhost variants for `vite dev` and Storybook.
+    Both: never `["*"]`, since we don't gain anything from it.
+    """
+    origins: list[str] = []
+    if settings.frontend_origin:
+        origins.append(settings.frontend_origin.rstrip("/"))
+    # Local dev hosts — kept regardless of env so a prod backend can still be
+    # exercised from a local frontend during deploy verification.
+    origins.extend(
+        [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+    )
+    # Deduplicate while preserving order.
+    seen = set()
+    out = []
+    for o in origins:
+        if o and o not in seen:
+            seen.add(o)
+            out.append(o)
+    return out
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -44,9 +96,6 @@ class SourceInfo(BaseModel):
     page_start: int
     page_end: int
     flesch_kincaid_grade: float | None = None
-    # Raw chunk text — surfaced so the frontend can render an in-panel preview
-    # of the retrieved passage without a second API call. Defaults to empty so
-    # older clients ignoring this field continue to work.
     text: str = ""
 
 
@@ -58,15 +107,42 @@ class QueryResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Routes
+# Health
 # ---------------------------------------------------------------------------
 
-@app.get("/")
+@app.get("/health")
 def health() -> dict:
-    provider = "ollama" if settings.use_local_llm else "gemini"
-    model = settings.local_llm_model if settings.use_local_llm else settings.gemini_model
-    return {"status": "ok", "provider": provider, "model": model}
+    """Cheap liveness check — confirms the process is up. Does NOT touch the
+    LLM (use /health/llm for that)."""
+    return {"status": "ok"}
 
+
+@app.get("/health/llm")
+def health_llm() -> dict:
+    """Provider-specific readiness check. Returns 200 with provider metadata
+    on success; 503 with a brief error string on failure. No stack traces
+    are exposed to the client."""
+    provider = get_llm_provider()
+    try:
+        info = provider.health_check()
+    except HealthCheckError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"provider": provider.name, "status": "error", "error": str(exc)},
+        )
+    return info
+
+
+# Backwards-compat: the old root endpoint kept for any existing consumers.
+@app.get("/")
+def root() -> dict:
+    info = get_llm_provider().info()
+    return {"status": "ok", **info}
+
+
+# ---------------------------------------------------------------------------
+# /query
+# ---------------------------------------------------------------------------
 
 @app.post("/query", response_model=QueryResponse)
 def query(req: QueryRequest) -> QueryResponse:

@@ -18,7 +18,13 @@
       "Bash(echo \"exit=$?\")",
       "Bash(cat vite.config.ts)",
       "Bash(cat vite.config.js)",
-      "Bash(echo \"tsc=$?\")"
+      "Bash(echo \"tsc=$?\")",
+      "Bash(pip install *)",
+      "Bash(uv pip *)",
+      "Bash(python -m pytest tests/test_llm.py -x --tb=short)",
+      "Bash(env -u LLM_PROVIDER -u GROQ_API_KEY python -m pytest tests/test_llm.py --tb=line -q)",
+      "Bash(unset LLM_PROVIDER)",
+      "Bash(unset GROQ_API_KEY)"
     ]
   }
 }

@@ -5,8 +5,11 @@ pydantic>=2.10
 pydantic-settings>=2.6
 python-dotenv>=1.0
 
-# LLM — Google Gemini (free tier: 10 RPM, 250 RPD on gemini-2.5-flash)
-google-genai>=1.0
+# LLM providers
+#   - Ollama (local dev) is talked to over plain HTTP via httpx; no SDK required.
+#   - Groq (production) uses the official SDK.
+groq>=0.11
+httpx>=0.28
 
 # Embeddings — local, free, fast on Apple Silicon
 sentence-transformers>=3.3
@@ -25,4 +28,3 @@ typer>=0.15
 
 # Dev
 pytest>=8.3
-httpx>=0.28

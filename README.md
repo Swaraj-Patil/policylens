@@ -1,6 +1,6 @@
 # PolicyLens
 
-A RAG-powered web app that makes university governance documents — faculty handbooks, policy manuals, board minutes — queryable in plain language, with strict citation enforcement and reading-difficulty flags on retrieved passages.
+A RAG-powered web app that makes university governance documents - faculty handbooks, policy manuals, board minutes - queryable in plain language, with strict citation enforcement and reading-difficulty flags on retrieved passages.
 
 ## Why
 
@@ -42,7 +42,7 @@ cp .env.example .env
 
 ### 2. Ollama (local LLM, no API key required)
 
-PolicyLens runs its language model locally — answers stay on your machine and there's no API quota or external service dependency.
+PolicyLens runs its language model locally - answers stay on your machine and there's no API quota or external service dependency.
 
 ```bash
 # Install
@@ -65,7 +65,7 @@ Set `LOCAL_LLM_MODEL` in `.env` to switch:
 | ------------------------ | ------------------------------------------------------- |
 | `qwen2.5:7b-instruct`    | **Default.** Best instruction-following at 7B scale.    |
 | `mistral:7b-instruct`    | Slightly faster, similar quality on extraction tasks.   |
-| `llama3.1:8b-instruct`   | Meta's open model — strong general-purpose alternative. |
+| `llama3.1:8b-instruct`   | Meta's open model - strong general-purpose alternative. |
 
 #### Hardware expectations on Apple Silicon
 
@@ -103,7 +103,7 @@ cd backend && uvicorn app.main:app --reload
 cd frontend && npm run dev
 ```
 
-On startup, the backend probes Ollama and logs which provider/model is in use. If Ollama is unreachable or the configured model isn't pulled, you'll see a warning at startup but the server still comes up — `/query` will return a fallback message until the LLM is available again.
+On startup, the backend probes Ollama and logs which provider/model is in use. If Ollama is unreachable or the configured model isn't pulled, you'll see a warning at startup but the server still comes up - `/query` will return a fallback message until the LLM is available again.
 
 ## Sourcing documents
 
@@ -111,8 +111,8 @@ PolicyLens uses publicly-available governance documents. Faculty handbooks are t
 
 ## Design decisions and tradeoffs
 
-See [`docs/design-choices.md`](docs/design-choices.md) for a running log of decisions made during development — chunking strategy, embedding choice, retrieval-k tuning, prompt iteration, the LLM-provider pivot, etc. This doc exists because evaluating computational tooling is a deliberate part of the project's purpose, not just engineering hygiene.
+See [`docs/design-choices.md`](docs/design-choices.md) for a running log of decisions made during development - chunking strategy, embedding choice, retrieval-k tuning, prompt iteration, the LLM-provider pivot, etc. This doc exists because evaluating computational tooling is a deliberate part of the project's purpose, not just engineering hygiene.
 
 ## License
 
-To be determined. Currently a research/demonstration project — not yet licensed for redistribution.
+To be determined. Currently a research/demonstration project - not yet licensed for redistribution.
