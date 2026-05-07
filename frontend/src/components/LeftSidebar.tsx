@@ -35,9 +35,24 @@ export function LeftSidebar({ width, minWidth, maxWidth, setWidth }: Props) {
       className="shrink-0 border-r border-rule bg-surface flex flex-col relative"
     >
       <div className="px-5 py-5 border-b border-rule">
-        <h1 className="text-[15px] font-semibold tracking-tight text-ink">PolicyLens</h1>
-        <p className="text-xs text-ink-soft mt-0.5">Governance research</p>
+        <div className="flex items-center gap-3">
+          <img
+            src="/icon.png"
+            alt=""
+            aria-hidden
+            width={40}
+            height={40}
+            className="w-10 h-10 rounded-md shrink-0"
+          />
+          <div className="min-w-0">
+            <h1 className="text-[15px] font-semibold tracking-tight text-ink leading-tight">
+              Policy<span className="text-accent">Lens</span>
+            </h1>
+            <p className="text-xs text-ink-soft mt-0.5 leading-tight">Governance research</p>
+          </div>
+        </div>
       </div>
+
 
       <nav className="flex-1 overflow-y-auto px-3 py-5 space-y-7">
         <Section label="Institution">
