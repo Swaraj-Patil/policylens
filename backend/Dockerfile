@@ -42,7 +42,7 @@ RUN python -c "from sentence_transformers import SentenceTransformer; \
 # Application code.
 COPY app ./app
 # Optional: pre-ingested vector store. Comment out if you persist via a volume.
-COPY data ./data
+# COPY data ./data  # removed: runtime-generated / optional volumeCOPY data ./data
 
 EXPOSE 8000
 
