@@ -14,7 +14,8 @@
       "Bash(npm create *)",
       "Bash(npm install *)",
       "Bash(npx tsc *)",
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "Bash(echo \"exit=$?\")"
     ]
   }
 }

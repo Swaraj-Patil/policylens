@@ -1,4 +1,4 @@
-import type { AnswerBlock, AnswerToken, Citation } from './types'
+import type { AnswerBlock, AnswerToken, Citation, GroupedSource, SourceInfo } from './types'
 
 // Inline tokens we care about: citation brackets [...] OR bold **...**.
 // Citation parsing is unchanged from Step 3; the bold branch is purely
@@ -105,4 +105,45 @@ export function parseAnswerBlocks(text: string): AnswerBlock[] {
 /** Stable hover-linkage key shared by chips and source cards. */
 export function matchKeyOf(c: { institution: string; section_title: string }): string {
   return `${c.institution}::${c.section_title}`
+}
+
+/**
+ * Collapse repeated retrievals from the same section into one card. Two chunks
+ * sharing (institution, section_title) become one GroupedSource whose page
+ * span is the union, whose excerpts are concatenated in retrieval order, and
+ * whose count exposes how many chunks contributed. The first occurrence wins
+ * ordering — relevance order from the backend is preserved.
+ */
+export function groupSources(sources: SourceInfo[]): GroupedSource[] {
+  const byKey = new Map<string, GroupedSource>()
+  const order: string[] = []
+  for (const s of sources) {
+    const key = matchKeyOf(s)
+    const existing = byKey.get(key)
+    const text = (s.text ?? '').trim()
+    if (existing) {
+      existing.page_start = Math.min(existing.page_start, s.page_start)
+      existing.page_end = Math.max(existing.page_end, s.page_end)
+      if (s.flesch_kincaid_grade !== null) {
+        existing.flesch_kincaid_grade =
+          existing.flesch_kincaid_grade === null
+            ? s.flesch_kincaid_grade
+            : Math.max(existing.flesch_kincaid_grade, s.flesch_kincaid_grade)
+      }
+      if (text) existing.excerpts.push(text)
+      existing.count += 1
+    } else {
+      byKey.set(key, {
+        institution: s.institution,
+        section_title: s.section_title,
+        page_start: s.page_start,
+        page_end: s.page_end,
+        flesch_kincaid_grade: s.flesch_kincaid_grade,
+        excerpts: text ? [text] : [],
+        count: 1,
+      })
+      order.push(key)
+    }
+  }
+  return order.map((k) => byKey.get(k)!)
 }

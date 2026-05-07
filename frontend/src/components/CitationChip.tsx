@@ -9,7 +9,7 @@ export function CitationChip({
   citation: Citation
   matched: boolean
 }) {
-  const { hoveredMatchKey, setHoveredMatchKey } = useApp()
+  const { hoveredMatchKey, setHoveredMatchKey, focusSource } = useApp()
   const key = matchKeyOf(citation)
   const active = matched && hoveredMatchKey === key
 
@@ -19,17 +19,29 @@ export function CitationChip({
   function leave() {
     if (matched) setHoveredMatchKey(null)
   }
+  function onClick() {
+    if (matched) focusSource(key)
+  }
 
   return (
     <button
       type="button"
+      // data-cite-key powers the evidence rail's positional scan in
+      // CenterPanel — the rail finds chips via querySelectorAll instead of
+      // threading refs through the InlineRender pipeline.
+      data-cite-key={matched ? key : undefined}
       onMouseEnter={enter}
       onMouseLeave={leave}
       onFocus={enter}
       onBlur={leave}
+      onClick={onClick}
       tabIndex={matched ? 0 : -1}
       aria-disabled={!matched}
-      title={`${citation.institution}, ${citation.section_title}, ${citation.page_ref}`}
+      title={
+        matched
+          ? `${citation.institution}, ${citation.section_title}, ${citation.page_ref} — click to open source`
+          : `${citation.institution}, ${citation.section_title}, ${citation.page_ref}`
+      }
       className={[
         'inline-flex items-baseline gap-1 align-baseline',
         'px-1.5 py-[1px] rounded-sm border',

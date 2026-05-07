@@ -72,3 +72,36 @@ body {
   background-size: 200% 100%;
   animation: shimmer 2.4s ease-in-out infinite;
 }
+
+/* Source-card attention pulse — fired when a citation chip is clicked.
+   Box-shadow flash + soft background lift, runs once per focus event.
+   Composed alongside the existing color/border transitions on the card. */
+@keyframes sourcePulse {
+  0%   { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); background-color: var(--color-highlight); }
+  20%  { box-shadow: 0 0 0 6px rgba(79, 70, 229, 0.18); }
+  100% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); background-color: var(--color-highlight); }
+}
+
+.source-pulse {
+  animation: sourcePulse 1.2s ease-out;
+}
+
+/* Empty-state ambient breathing — used on the inspector's idle copy and on
+   error/empty views in the center panel. Disabled under prefers-reduced-motion
+   via the global media query below. */
+@keyframes breathe {
+  0%, 100% { opacity: 0.92; }
+  50%      { opacity: 1; }
+}
+
+.source-breath {
+  animation: breathe 5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-line,
+  .source-pulse,
+  .source-breath {
+    animation: none;
+  }
+}

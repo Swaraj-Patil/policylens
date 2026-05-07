@@ -10,22 +10,27 @@ const INSTITUTIONS = [
   {
     key: 'Northeastern',
     label: 'Northeastern University',
+    short: 'NE',
     tintDot: '#C8102E',
     tintBg: 'rgba(200, 16, 46, 0.07)',
   },
   {
     key: 'Boston University',
     label: 'Boston University',
+    short: 'BU',
     tintDot: '#8C0F0F',
     tintBg: 'rgba(140, 15, 15, 0.07)',
   },
   {
     key: 'Harvard',
     label: 'Harvard University',
+    short: 'HV',
     tintDot: '#A41E22',
     tintBg: 'rgba(164, 30, 34, 0.07)',
   },
 ] as const
+
+const RAIL_WIDTH = 56
 
 type Props = {
   width: number
@@ -34,6 +39,9 @@ type Props = {
   animate: boolean
   setWidth: Dispatch<SetStateAction<number>>
   onResetWidth: () => void
+  /** When true the sidebar renders as an icon rail — used at very narrow
+   *  viewports. Width and resize handle are ignored in this mode. */
+  collapsed?: boolean
 }
 
 export function LeftSidebar({
@@ -43,11 +51,10 @@ export function LeftSidebar({
   animate,
   setWidth,
   onResetWidth,
+  collapsed = false,
 }: Props) {
   const { institution, setInstitution, history, runQuery, clearHistory } = useApp()
 
-  // Show only the current institution's history. Other institutions' entries
-  // are still in localStorage; switching institution swaps the visible list.
   const scopedHistory = useMemo(
     () => history.filter((e) => e.institution === institution),
     [history, institution],
@@ -55,6 +62,10 @@ export function LeftSidebar({
 
   function handleResize(dx: number) {
     setWidth((w) => Math.max(minWidth, Math.min(maxWidth, w + dx)))
+  }
+
+  if (collapsed) {
+    return <CollapsedSidebar institution={institution} onSelect={setInstitution} />
   }
 
   return (
@@ -155,6 +166,72 @@ export function LeftSidebar({
       </div>
 
       <ResizeHandle edge="right" onDelta={handleResize} onReset={onResetWidth} />
+    </aside>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Collapsed (icon-rail) variant — shown at <900px viewports. Just the brand
+// mark and institution dots; documents / history / compare drop off because
+// they need wider rows to be legible. Tooltips preserve discoverability.
+// ---------------------------------------------------------------------------
+
+function CollapsedSidebar({
+  institution,
+  onSelect,
+}: {
+  institution: string
+  onSelect: (name: string) => void
+}) {
+  return (
+    <aside
+      style={{ width: `${RAIL_WIDTH}px` }}
+      className="shrink-0 border-r border-rule bg-surface flex flex-col items-center py-4 gap-4"
+    >
+      <img
+        src="/icon.png"
+        alt="PolicyLens"
+        width={36}
+        height={36}
+        className="w-9 h-9 rounded-md shrink-0"
+        title="PolicyLens"
+      />
+      <div className="w-full border-t border-rule" />
+      <div className="flex flex-col items-center gap-1 w-full">
+        {INSTITUTIONS.map((inst) => {
+          const active = institution === inst.key
+          return (
+            <button
+              key={inst.key}
+              type="button"
+              onClick={() => onSelect(inst.key)}
+              title={inst.label}
+              aria-pressed={active}
+              className={
+                'group relative flex items-center justify-center w-10 h-10 rounded-md cursor-pointer ' +
+                'transition-colors duration-150 ' +
+                (active ? '' : 'hover:bg-canvas')
+              }
+              style={active ? { backgroundColor: inst.tintBg } : undefined}
+            >
+              <span
+                aria-hidden
+                className="block w-2.5 h-2.5 rounded-full transition-transform duration-150 group-hover:scale-110"
+                style={{
+                  backgroundColor: inst.tintDot,
+                  opacity: active ? 1 : 0.55,
+                }}
+              />
+              <span
+                aria-hidden
+                className="absolute left-1 right-1 -bottom-0.5 text-center font-mono text-[8px] uppercase tracking-wider text-ink-muted/70 select-none"
+              >
+                {inst.short}
+              </span>
+            </button>
+          )
+        })}
+      </div>
     </aside>
   )
 }
