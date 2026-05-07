@@ -16,7 +16,7 @@ from app.llm import (
     check_llm_available,
     get_llm_provider,
 )
-from app.retrieval import retrieve
+from app.retrieval import ensure_collection_ready, retrieve
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,6 +35,10 @@ async def lifespan(app: FastAPI):
     # log fires before any request arrives.
     get_llm_provider()
     check_llm_available()
+    # Verify (or create) the Chroma collection. A fresh deploy without an
+    # ingested DB now lands in an empty-collection state instead of crashing
+    # on the first /query.
+    ensure_collection_ready()
     yield
 
 
@@ -146,15 +150,29 @@ def root() -> dict:
 
 @app.post("/query", response_model=QueryResponse)
 def query(req: QueryRequest) -> QueryResponse:
-    """Answer a governance question about a single institution."""
+    """Answer a governance question about a single institution.
+
+    Robust to a missing/empty vector store: if retrieval can't run for any
+    reason (collection not yet created, persist dir gone, embedding model
+    failure), we log the cause and proceed with `chunks=[]`. The downstream
+    LLM path treats that as the "no relevant passages" case, the response
+    schema is preserved, and the frontend renders its no_results state.
+    """
     try:
         chunks = retrieve(
             question=req.question,
             institution=req.institution,
             top_k=req.top_k,
         )
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Retrieval failed: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 — graceful no-data fallback
+        logger.warning(
+            "Retrieval failed for institution=%r (%s: %s). "
+            "Returning empty-sources response.",
+            req.institution,
+            type(exc).__name__,
+            exc,
+        )
+        chunks = []
 
     answer = answer_single(
         question=req.question,
