@@ -254,6 +254,89 @@ Detailed instructions:
 
 ---
 
+## Production Deployment Guide
+
+### Architecture
+
+Frontend deploys to **Vercel** (static Vite build). Backend deploys to **Render** or **Railway** (FastAPI in Docker). Production LLM is **Groq**; **Ollama** is the local-dev provider only.
+
+### Required environment variables
+
+**Frontend (Vercel):**
+
+| Variable | Required | Value |
+|---|---|---|
+| `VITE_API_BASE_URL` | yes | Full backend URL, no trailing slash |
+
+**Backend (Render / Railway):**
+
+| Variable | Required | Value |
+|---|---|---|
+| `LLM_PROVIDER` | yes | `groq` (production) or `ollama` (dev) |
+| `GROQ_API_KEY` | yes (prod) | `gsk_…` from <https://console.groq.com/keys> |
+| `GROQ_MODEL` | no | default `llama3-70b-8192` |
+| `OLLAMA_BASE_URL` | no (dev only) | default `http://localhost:11434` |
+| `FRONTEND_ORIGIN` | yes (prod) | Deployed frontend URL, exact match |
+
+### Deployment steps
+
+#### A. Backend (Render or Railway)
+
+1. Push the repo to GitHub.
+2. **Render:** New → Blueprint → select repo. It picks up `backend/render.yaml` + `Dockerfile`.
+   **Railway:** New Project → Deploy from GitHub. It picks up `backend/railway.json` + `Dockerfile`.
+3. In the platform's environment panel, set: `LLM_PROVIDER=groq`, `GROQ_API_KEY`, `FRONTEND_ORIGIN`.
+4. Deploy. First build ~3–5 minutes (downloads embedding model).
+5. Verify:
+   ```bash
+   curl https://<backend>/health        # → {"status":"ok"}
+   curl https://<backend>/health/llm    # → {"provider":"groq","status":"ok",...}
+   ```
+
+#### B. Frontend (Vercel)
+
+1. Vercel → Import Git Repo → set **Root Directory** to `frontend`, framework Vite.
+2. Set env var: `VITE_API_BASE_URL` = `https://<your-backend>` (Production + Preview).
+3. Deploy. ~1–2 minutes.
+4. Copy the Vercel URL into the backend's `FRONTEND_ORIGIN` and redeploy the backend.
+
+### Local development
+
+```bash
+# Terminal 1 — Ollama (optional; only when LLM_PROVIDER=ollama)
+ollama serve
+ollama pull qwen2.5:7b-instruct
+
+# Terminal 2 — Backend
+cd backend
+uv venv --python 3.12 && source .venv/bin/activate
+uv pip install -r requirements.txt
+cp .env.example .env
+uvicorn app.main:app --reload
+
+# Terminal 3 — Frontend
+cd frontend
+npm install
+npm run dev
+```
+
+Open <http://localhost:5173>. Vite proxies `/api/*` to the backend in dev — no env config needed.
+
+### Verification checklist
+
+- [ ] `/health` returns 200
+- [ ] `/health/llm` returns 200 with the expected provider/model
+- [ ] Submitting a query returns an answer with citation chips
+- [ ] Hovering / clicking a citation lights up the matching source card
+- [ ] Switching institutions clears the visible timeline; switching back restores it
+- [ ] Reloading the page restores the active answer and source inspector
+
+### Common issues
+
+- **CORS error in browser console** — backend `FRONTEND_ORIGIN` doesn't exactly match the Vercel URL (mind https vs http, no trailing slash). Update env, redeploy backend.
+- **Frontend throws `VITE_API_BASE_URL is not set`** — Vercel env var missing or empty. Set it and trigger a rebuild (Vite inlines at build time, not runtime).
+- **`/health/llm` returns 503** — `GROQ_API_KEY` missing or invalid. Rotate at <https://console.groq.com/keys>, update env, redeploy backend.
+
 ## Sourcing documents
 
 PolicyLens uses publicly-available governance documents. Faculty handbooks are typically published by university provost or HR offices and linked from public university websites. **Always verify a document is publicly published before ingesting; never ingest internal-only or confidential documents.**
