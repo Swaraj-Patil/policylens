@@ -21,4 +21,15 @@ export type Citation = {
 
 export type AnswerToken =
   | { type: 'text'; text: string }
+  | { type: 'bold'; text: string }
   | { type: 'citations'; items: Citation[] }
+
+export type AnswerBlock =
+  | { type: 'paragraph'; text: string }
+  | { type: 'list'; items: string[] }
+
+export type HistoryEntry = {
+  query: string
+  institution: string
+  timestamp: number // Date.now() at the moment the query succeeded
+}

@@ -1,13 +1,18 @@
-import type { AnswerToken, Citation } from './types'
+import type { AnswerBlock, AnswerToken, Citation } from './types'
 
-const BRACKET_RE = /\[([^\]]+)\]/g
+// Inline tokens we care about: citation brackets [...] OR bold **...**.
+// Citation parsing is unchanged from Step 3; the bold branch is purely
+// additive — citations outside of bold are detected exactly as before.
+const TOKEN_RE = /\[([^\]]+)\]|\*\*([^*]+)\*\*/g
 const PAGE_RE = /^pp?\.\s*\S/
+const LIST_LINE_RE = /^[-*]\s+/
 
 /**
- * Parse a single citation like "Northeastern, (1) Academic Freedom, p.77".
+ * Parse a single citation like "<Institution>, <Section Title>, p.<page>".
  * Heuristic: first comma-separated field is the institution, last is the page
  * reference, everything between is the section title joined back with ", ".
- * This survives section titles that themselves contain commas.
+ * This survives section titles that themselves contain commas. Institution is
+ * always taken verbatim from the bracket — never substituted with a default.
  */
 function parseSingleCitation(raw: string): Citation | null {
   const parts = raw
@@ -33,25 +38,29 @@ function parseBracket(content: string): Citation[] {
 }
 
 /**
- * Walk the answer text and produce a flat list of tokens. Brackets that don't
- * parse as citations (e.g. "[see appendix]") are emitted as plain text so the
- * answer body remains lossless.
+ * Walk the inline text and produce a flat token list of plain text, **bold**,
+ * and citation runs. Brackets that don't parse as citations (e.g. "[see appendix]")
+ * are emitted as plain text so the answer body remains lossless.
  */
 export function tokenizeAnswer(text: string): AnswerToken[] {
   const tokens: AnswerToken[] = []
   let lastIndex = 0
   let match: RegExpExecArray | null
 
-  BRACKET_RE.lastIndex = 0
-  while ((match = BRACKET_RE.exec(text)) !== null) {
+  TOKEN_RE.lastIndex = 0
+  while ((match = TOKEN_RE.exec(text)) !== null) {
     if (match.index > lastIndex) {
       tokens.push({ type: 'text', text: text.slice(lastIndex, match.index) })
     }
-    const citations = parseBracket(match[1])
-    if (citations.length > 0) {
-      tokens.push({ type: 'citations', items: citations })
-    } else {
-      tokens.push({ type: 'text', text: match[0] })
+    if (match[1] !== undefined) {
+      const citations = parseBracket(match[1])
+      if (citations.length > 0) {
+        tokens.push({ type: 'citations', items: citations })
+      } else {
+        tokens.push({ type: 'text', text: match[0] })
+      }
+    } else if (match[2] !== undefined) {
+      tokens.push({ type: 'bold', text: match[2] })
     }
     lastIndex = match.index + match[0].length
   }
@@ -60,6 +69,26 @@ export function tokenizeAnswer(text: string): AnswerToken[] {
     tokens.push({ type: 'text', text: text.slice(lastIndex) })
   }
   return tokens
+}
+
+/**
+ * Split the answer into blocks (paragraphs or bullet lists) at \n\n boundaries.
+ * A block is treated as a list iff every non-empty line starts with "- " or "* ".
+ * Inline parsing (citations, bold) happens later, per-block, in tokenizeAnswer.
+ */
+export function parseAnswerBlocks(text: string): AnswerBlock[] {
+  const blocks: AnswerBlock[] = []
+  for (const section of text.split('\n\n')) {
+    if (!section.trim()) continue
+    const lines = section.split('\n').filter((l) => l.trim().length > 0)
+    if (lines.length > 0 && lines.every((l) => LIST_LINE_RE.test(l.trim()))) {
+      const items = lines.map((l) => l.trim().replace(LIST_LINE_RE, ''))
+      blocks.push({ type: 'list', items })
+    } else {
+      blocks.push({ type: 'paragraph', text: section })
+    }
+  }
+  return blocks
 }
 
 /** Stable hover-linkage key shared by chips and source cards. */

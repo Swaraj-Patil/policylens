@@ -41,26 +41,28 @@ export function SourceCard({
       onBlur={leave}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: active ? -1 : 0 }}
+      whileHover={{ y: -1 }}
       transition={{
         opacity: { duration: 0.28, ease: EASE_OUT_QUART, delay: index * 0.04 },
         y: { duration: 0.15, ease: EASE_OUT_QUART },
       }}
       className={[
-        'block w-full text-left px-4 py-3 rounded-xl border',
+        'block w-full text-left px-5 py-4 border-l-2',
         'transition-colors duration-150',
-        'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+        'focus:outline-none',
         active
-          ? 'bg-highlight border-accent shadow-card-hover'
-          : 'bg-surface border-rule shadow-card hover:border-rule-strong',
+          ? 'bg-highlight border-accent'
+          : 'border-transparent hover:bg-canvas',
       ].join(' ')}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2 text-[10px] uppercase tracking-[0.08em] text-ink-muted mb-1.5">
+          <div className="flex items-baseline gap-2 text-[10px] uppercase tracking-[0.1em] text-ink-muted mb-2">
             <span>{source.institution}</span>
+            <span aria-hidden className="text-ink-muted/50">·</span>
             <span className="font-mono normal-case tracking-normal">{pageRef}</span>
           </div>
-          <h4 className="text-[13px] font-medium text-ink leading-snug">
+          <h4 className="text-[14px] font-semibold text-ink leading-snug">
             {source.section_title}
           </h4>
         </div>

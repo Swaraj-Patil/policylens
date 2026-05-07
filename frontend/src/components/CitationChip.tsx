@@ -31,16 +31,16 @@ export function CitationChip({
       aria-disabled={!matched}
       title={`${citation.institution}, ${citation.section_title}, ${citation.page_ref}`}
       className={[
-        'inline-flex items-center gap-1 align-baseline',
-        'px-1.5 py-[1px] rounded-md border',
+        'inline-flex items-baseline gap-1 align-baseline',
+        'px-1.5 py-[1px] rounded-sm border',
         'text-[12px] leading-tight',
         'transition-colors duration-150',
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
         matched
           ? active
             ? 'bg-highlight border-accent text-accent'
-            : 'bg-accent/[0.08] border-accent/25 text-accent hover:bg-accent/15 hover:border-accent/40 cursor-pointer'
-          : 'bg-canvas border-rule text-ink-muted cursor-default',
+            : 'border-accent/30 text-accent hover:bg-accent/[0.05] hover:border-accent/55 cursor-pointer'
+          : 'border-rule text-ink-muted/85 cursor-default',
       ].join(' ')}
     >
       <span className="font-sans">{citation.section_title}</span>

@@ -2,7 +2,8 @@ import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from '
 import { motion } from 'framer-motion'
 import { useApp } from '../state'
 import type { QueryResponse } from '../types'
-import { matchKeyOf, tokenizeAnswer } from '../citations'
+import { matchKeyOf, parseAnswerBlocks, tokenizeAnswer } from '../citations'
+import type { AnswerBlock } from '../types'
 import { CitationChip } from './CitationChip'
 
 const EXAMPLE_QUERIES = [
@@ -52,13 +53,13 @@ export function CenterPanel() {
 
 function IdleHero() {
   return (
-    <header className="text-center mb-10">
-      <h2 className="text-[28px] leading-[1.25] font-semibold tracking-tight text-ink">
+    <header className="text-center mb-12">
+      <h2 className="text-[30px] leading-[1.18] font-semibold tracking-tight text-ink">
         Ask a question about university governance documents.
       </h2>
-      <p className="text-sm text-ink-soft mt-3 leading-relaxed">
-        Search across faculty handbooks. Every answer is grounded in retrieved
-        passages with page-anchored citations.
+      <p className="text-[15px] text-ink-soft mt-4 leading-relaxed max-w-[480px] mx-auto">
+        Plain-language search across institutional governance documents. Answers
+        cite the exact section and page they come from.
       </p>
     </header>
   )
@@ -77,22 +78,50 @@ function SearchBar({
   onChange: (v: string) => void
   onSubmit: (q: string) => void
 }) {
-  const { loading } = useApp()
+  const { loading, currentQuery, resetSession } = useApp()
   const inputRef = useRef<HTMLInputElement>(null)
   const [focused, setFocused] = useState(false)
 
-  // Global "/" shortcut to focus the input (skips when an input is already focused)
+  // Auto-focus the search input on first mount so the user can start typing
+  // immediately. StrictMode runs effects twice in dev; focus() is idempotent.
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  // Sync local input value with currentQuery so external triggers — clicking a
+  // history item or chip — populate the input automatically. Skipping when
+  // currentQuery is null leaves the user's typed text alone in idle state.
+  useEffect(() => {
+    if (currentQuery !== null && currentQuery !== value) {
+      onChange(currentQuery)
+    }
+  }, [currentQuery, value, onChange])
+
+  // Global keyboard shortcuts:
+  //   "/"   focus the input (ignored while typing in another field)
+  //   Esc   clear the input + return to idle (ignored while a request is in flight)
   useEffect(() => {
     function handler(e: KeyboardEvent) {
-      if (e.key !== '/') return
-      const tag = (document.activeElement?.tagName || '').toLowerCase()
-      if (tag === 'input' || tag === 'textarea') return
-      e.preventDefault()
-      inputRef.current?.focus()
+      if (e.key === '/') {
+        const tag = (document.activeElement?.tagName || '').toLowerCase()
+        if (tag === 'input' || tag === 'textarea') return
+        e.preventDefault()
+        inputRef.current?.focus()
+        return
+      }
+      if (e.key === 'Escape') {
+        if (loading) return
+        if (value === '' && currentQuery === null) return
+        e.preventDefault()
+        onChange('')
+        resetSession()
+        // Move focus back to the input so the user can immediately type again.
+        inputRef.current?.focus()
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [])
+  }, [loading, value, currentQuery, onChange, resetSession])
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -149,7 +178,7 @@ function ExampleChips({ onSelect }: { onSelect: (q: string) => void }) {
           key={q}
           type="button"
           onClick={() => onSelect(q)}
-          className="text-xs text-ink-soft px-3 py-1.5 rounded-md border border-rule bg-surface hover:border-rule-strong hover:text-ink transition-colors"
+          className="text-xs text-ink-soft px-3 py-1.5 rounded-md border border-rule bg-surface hover:border-rule-strong hover:bg-canvas hover:text-ink hover:-translate-y-px transition-all duration-150 cursor-pointer"
         >
           {q}
         </button>
@@ -175,26 +204,58 @@ function ResultArea() {
 }
 
 function AnswerSkeleton() {
-  const widths = ['85%', '100%', '92%', '78%', '95%', '60%']
+  // Two paragraph groups, separated by extra space, mimic the structure of a
+  // real answer: a body paragraph followed by a shorter "Where to read more"
+  // footer. The shimmer animation passes through each line in sequence via
+  // staggered animation-delay, giving a calm wave instead of a noisy pulse.
+  const main = ['92%', '100%', '88%', '76%']
+  const footer = ['54%', '38%']
+  let delay = 0
   return (
-    <div className="space-y-3" aria-busy="true" aria-live="polite">
-      {widths.map((w, i) => (
-        <div
-          key={i}
-          className="h-4 bg-rule/70 rounded-md animate-pulse"
-          style={{ width: w, animationDelay: `${i * 80}ms` }}
-        />
-      ))}
+    <div className="space-y-7" aria-busy="true" aria-live="polite">
+      <div className="space-y-3">
+        {main.map((w, i) => {
+          const d = delay
+          delay += 80
+          return <SkeletonLine key={`m-${i}`} width={w} delay={d} />
+        })}
+      </div>
+      <div className="space-y-3">
+        {footer.map((w, i) => {
+          const d = delay
+          delay += 80
+          return <SkeletonLine key={`f-${i}`} width={w} delay={d} />
+        })}
+      </div>
     </div>
   )
 }
 
+function SkeletonLine({ width, delay }: { width: string; delay: number }) {
+  return (
+    <div
+      className="h-3 rounded-md skeleton-line"
+      style={{ width, animationDelay: `${delay}ms` }}
+    />
+  )
+}
+
 function AnswerView({ result }: { result: QueryResponse }) {
-  const paragraphs = result.answer.split('\n\n')
+  const blocks = useMemo(() => parseAnswerBlocks(result.answer), [result.answer])
   const sourceKeys = useMemo(
     () => new Set(result.sources.map(matchKeyOf)),
     [result.sources],
   )
+
+  // Detect the trailing "Where to read more" footer block (a stable convention
+  // in the prompt) so we can render it as a clearly demarcated metadata block
+  // instead of mixing it into the body prose.
+  const footerIdx = blocks.findIndex(
+    (b) => b.type === 'paragraph' && b.text.toLowerCase().startsWith('where to read more'),
+  )
+  const hasFooter = footerIdx >= 0
+  const body = hasFooter ? blocks.slice(0, footerIdx) : blocks
+  const footer = hasFooter ? blocks[footerIdx] : null
 
   return (
     <motion.article
@@ -203,16 +264,49 @@ function AnswerView({ result }: { result: QueryResponse }) {
       transition={{ duration: 0.28, ease: EASE_OUT_QUART }}
       className="text-[16px] leading-[1.75] text-ink"
     >
-      {paragraphs.map((para, i) => (
-        <p key={i} className="mb-4 last:mb-0">
-          <RenderedParagraph text={para} sourceKeys={sourceKeys} />
-        </p>
-      ))}
+      <div className="space-y-5">
+        {body.map((block, i) => (
+          <BlockView key={`b-${i}`} block={block} sourceKeys={sourceKeys} />
+        ))}
+      </div>
+
+      {footer !== null && (
+        <div className="mt-8 pt-5 border-t border-rule">
+          <div className="text-[13px] text-ink-soft leading-[1.65]">
+            <BlockView block={footer} sourceKeys={sourceKeys} />
+          </div>
+        </div>
+      )}
     </motion.article>
   )
 }
 
-function RenderedParagraph({
+function BlockView({
+  block,
+  sourceKeys,
+}: {
+  block: AnswerBlock
+  sourceKeys: Set<string>
+}) {
+  if (block.type === 'paragraph') {
+    return (
+      <p>
+        <InlineRender text={block.text} sourceKeys={sourceKeys} />
+      </p>
+    )
+  }
+  return (
+    <ul className="list-disc list-outside pl-5 space-y-1.5 marker:text-ink-muted">
+      {block.items.map((item, i) => (
+        <li key={i}>
+          <InlineRender text={item} sourceKeys={sourceKeys} />
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function InlineRender({
   text,
   sourceKeys,
 }: {
@@ -225,6 +319,13 @@ function RenderedParagraph({
       {tokens.map((token, ti) => {
         if (token.type === 'text') {
           return <span key={ti}>{token.text}</span>
+        }
+        if (token.type === 'bold') {
+          return (
+            <strong key={ti} className="font-semibold text-ink">
+              {token.text}
+            </strong>
+          )
         }
         return (
           <Fragment key={ti}>

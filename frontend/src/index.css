@@ -1,24 +1,26 @@
 @import "tailwindcss";
 
 @theme {
-  /* Surfaces */
-  --color-canvas: #FAFAFA;
+  /* Surfaces — warm-slate canvas, blue-tinted ink */
+  --color-canvas: #F6F7FB;
   --color-surface: #FFFFFF;
 
-  /* Ink (text) */
-  --color-ink: #0F172A;
-  --color-ink-soft: #64748B;
+  /* Ink (text) — deep navy slate, warm muted gray */
+  --color-ink: #0B1220;
+  --color-ink-soft: #5B6472;
   --color-ink-muted: #94A3B8;
 
   /* Rules (borders) */
   --color-rule: #E2E8F0;
   --color-rule-strong: #CBD5E1;
 
-  /* Brand + accent */
+  /* Brand + accent — muted indigo as the active interaction color,
+     pale lavender as the soft "linked" highlight. */
   --color-brand: #475569;
   --color-brand-hover: #334155;
-  --color-accent: #0E7490;
-  --color-highlight: #FEF3C7;
+  --color-accent: #4F46E5;
+  --color-accent-strong: #4338CA;
+  --color-highlight: #EEF2FF;
 
   /* Typography */
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
@@ -50,4 +52,23 @@ body {
 ::selection {
   background: var(--color-highlight);
   color: var(--color-ink);
+}
+
+/* Skeleton shimmer — slate-200 base with a subtle slate-300 highlight pass.
+   Staggered via animation-delay on each line in CenterPanel. */
+@keyframes shimmer {
+  from { background-position: 200% 50%; }
+  to   { background-position: -200% 50%; }
+}
+
+.skeleton-line {
+  background-color: rgb(226 232 240);
+  background-image: linear-gradient(
+    100deg,
+    rgb(226 232 240) 35%,
+    rgb(203 213 225) 50%,
+    rgb(226 232 240) 65%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2.4s ease-in-out infinite;
 }
