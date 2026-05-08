@@ -16,14 +16,15 @@ Active development. Initial commit May 2026.
 
 ## Screenshots
 
-> _Screenshots / demo recording placeholder. Replace this section with rendered images once the demo is captured._
+> _Screenshots / demo recording._
 
 | | |
 |---|---|
-| ![Idle hero — composer + rotating example](docs/screenshots/idle-hero.png) | ![Active answer with citation chips](docs/screenshots/answer-with-citations.png) |
-| ![Source inspector — ranked passages](docs/screenshots/source-inspector.png) | ![Stacked answer timeline](docs/screenshots/answer-timeline.png) |
+| <img width="1470" height="777" alt="Screenshot 2026-05-07 at 4 37 12 PM" src="https://github.com/user-attachments/assets/659c2895-c5d1-4d0c-b9b4-79628d4d16d0" /> | <img width="1470" height="835" alt="Screenshot 2026-05-07 at 4 38 33 PM" src="https://github.com/user-attachments/assets/65c1c7e5-1954-431c-b561-795b4299c5e8" />
+| <img width="1469" height="835" alt="Screenshot 2026-05-07 at 4 39 46 PM" src="https://github.com/user-attachments/assets/7be9549b-c045-4c9f-adf9-4f7747f7c076" /> | <img width="606" height="411" alt="image" src="https://github.com/user-attachments/assets/0eef653e-b66d-4de7-9d39-a157e35169ad" />
 
-A 90-second demo video lives at `docs/demo.mp4` (not committed; recorded per release).
+
+A 90-second demo video lives at `https://youtu.be/L08XwNNI8zs`.
 
 ---
 
